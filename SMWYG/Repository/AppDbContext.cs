@@ -26,6 +26,12 @@ namespace SMWYG
             modelBuilder.Entity<InviteToken>().ToTable("invite_tokens");
             modelBuilder.Entity<ActiveStream>().ToTable("active_streams");
 
+            modelBuilder.Entity<Server>()
+                .HasOne(s => s.Owner)
+                .WithMany(u => u.OwnedServers)
+                .HasForeignKey(s => s.OwnerId)
+                .HasPrincipalKey(u => u.Id);
+
             // Composite primary key
             modelBuilder.Entity<ServerMember>()
                 .HasKey(sm => new { sm.ServerId, sm.UserId });

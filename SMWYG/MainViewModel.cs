@@ -55,9 +55,8 @@ namespace SMWYG
         [RelayCommand]
         public async Task LoadServersAsync()
         {
-            var userServers = await _db.ServerMembers
-                .Where(sm => sm.UserId == currentUser.Id)
-                .Select(sm => sm.Server)
+            var userServers = await _db.Servers
+                .Where(s => _db.ServerMembers.Any(sm => sm.ServerId == s.Id && sm.UserId == currentUser.Id))
                 .OrderBy(s => s.Name)
                 .ToListAsync();
 

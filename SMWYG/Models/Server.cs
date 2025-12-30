@@ -1,20 +1,26 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Threading.Channels;
+﻿using Microsoft.EntityFrameworkCore;
+using SMWYG.Models;
+using System.ComponentModel.DataAnnotations.Schema;
 
-namespace SMWYG.Models
+public class Server
 {
-    public class Server
-    {
-        public Guid Id { get; set; }
-        public string Name { get; set; } = string.Empty;
-        public string? Icon { get; set; }
-        public Guid OwnerId { get; set; }
-        public User Owner { get; set; } = null!;
-        public DateTime CreatedAt { get; set; }
+    [Column("id")]
+    public Guid Id { get; set; }
 
-        public ICollection<ServerMember> Members { get; set; } = new List<ServerMember>();
-        public ICollection<Channel> Channels { get; set; } = new List<Channel>();
-    }
+    [Column("name")]
+    public string Name { get; set; }
+
+    [Column("icon")]
+    public string? Icon { get; set; }
+
+    [Column("owner_id")]
+    public Guid OwnerId { get; set; }
+    [ForeignKey(nameof(OwnerId))]
+    [InverseProperty(nameof(User.OwnedServers))]
+    public User Owner { get; set; } = null!;
+
+    [Column("created_at")]
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public ICollection<ServerMember> Members { get; set; } = new List<ServerMember>();
+    public ICollection<Channel> Channels { get; set; } = new List<Channel>();
 }
