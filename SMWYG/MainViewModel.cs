@@ -159,7 +159,13 @@ namespace SMWYG
             _db.Servers.Add(newServer);
 
             // Add current user as owner/member
-            _db.ServerMembers.Add(new ServerMember(newServer.Id, currentUser.Id) { Role = "owner" });
+            _db.ServerMembers.Add(new ServerMember
+            {
+                ServerId = newServer.Id,
+                UserId = currentUser.Id,
+                Role = "owner",
+                JoinedAt = DateTime.UtcNow
+            });
 
             // Create default channels
             _db.Channels.Add(new Channel

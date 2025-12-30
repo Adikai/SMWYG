@@ -1,14 +1,13 @@
 ﻿<Window x:Class="SMWYG.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:local="clr-namespace:SMWYG"
+        xmlns:converters="clr-namespace:SMWYG.Converters"
     Title="Group Streaming App" Height="900" Width="1600"
         Background="#202225"
         WindowState="Maximized">
 
     <Window.Resources>
-        <!-- Optional: Converter for server initials if no icon -->
-        <local:StringToInitialsConverter x:Key="InitialsConverter"/>
+        <converters:StringToInitialsConverter x:Key="StringToInitialsConverter"/>
     </Window.Resources>
 
     <Grid>
