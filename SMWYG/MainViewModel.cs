@@ -3,9 +3,12 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Win32;
+using SMWYG.Dialogs;
 using SMWYG.Models;
 using System;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -16,6 +19,7 @@ namespace SMWYG
     {
         private readonly AppDbContext _db;
         private readonly IConfiguration _config;
+        private Guid? _pendingChannelSelection;
 
         // Collections
         [ObservableProperty]
@@ -38,6 +42,48 @@ namespace SMWYG
         [ObservableProperty]
         private string messageInput = string.Empty;
 
+        private bool isServerSettingsOpen;
+        public bool IsServerSettingsOpen
+        {
+            get => isServerSettingsOpen;
+            set => SetProperty(ref isServerSettingsOpen, value);
+        }
+
+        private string serverSettingsName = string.Empty;
+        public string ServerSettingsName
+        {
+            get => serverSettingsName;
+            set => SetProperty(ref serverSettingsName, value);
+        }
+
+        private string serverSettingsInviteCode = string.Empty;
+        public string ServerSettingsInviteCode
+        {
+            get => serverSettingsInviteCode;
+            set => SetProperty(ref serverSettingsInviteCode, value);
+        }
+
+        private bool isUserSettingsOpen;
+        public bool IsUserSettingsOpen
+        {
+            get => isUserSettingsOpen;
+            set => SetProperty(ref isUserSettingsOpen, value);
+        }
+
+        private string userSettingsUsername = string.Empty;
+        public string UserSettingsUsername
+        {
+            get => userSettingsUsername;
+            set => SetProperty(ref userSettingsUsername, value);
+        }
+
+        private string? userSettingsProfilePicturePath;
+        public string? UserSettingsProfilePicturePath
+        {
+            get => userSettingsProfilePicturePath;
+            set => SetProperty(ref userSettingsProfilePicturePath, value);
+        }
+
         // Current user (hardcoded for now – replace with real login later)
         private readonly User currentUser = new User
         {
@@ -45,15 +91,26 @@ namespace SMWYG
             Username = "Adhil"
         };
 
+        public User CurrentUser => currentUser;
+
         public MainViewModel(AppDbContext db, IConfiguration config)
         {
             _db = db;
             _config = config;
+            UserSettingsUsername = currentUser.Username;
+            UserSettingsProfilePicturePath = currentUser.ProfilePicture;
         }
 
         // Load all servers the current user is a member of
         [RelayCommand]
         public async Task LoadServersAsync()
+        {
+            var previousSelection = SelectedServer?.Id;
+            SelectedServer = null;
+            await PopulateServersAsync(previousSelection);
+        }
+
+        private async Task PopulateServersAsync(Guid? serverIdToSelect)
         {
             var userServers = await _db.Servers
                 .Where(s => _db.ServerMembers.Any(sm => sm.ServerId == s.Id && sm.UserId == currentUser.Id))
@@ -66,10 +123,26 @@ namespace SMWYG
                 Servers.Add(server);
             }
 
-            // Auto-select first server if any
+            if (serverIdToSelect.HasValue)
+            {
+                var match = Servers.FirstOrDefault(s => s.Id == serverIdToSelect.Value);
+                if (match != null)
+                {
+                    SelectedServer = match;
+                    return;
+                }
+            }
+
             if (Servers.Any() && SelectedServer == null)
             {
                 SelectedServer = Servers.First();
+            }
+            else if (!Servers.Any())
+            {
+                SelectedServer = null;
+                Channels.Clear();
+                SelectedChannel = null;
+                Messages.Clear();
             }
         }
 
@@ -78,16 +151,22 @@ namespace SMWYG
         {
             if (value != null)
             {
-                _ = LoadChannelsAsync(value.Id);
+                UpdateServerSettingsSnapshot(value);
+                _ = LoadChannelsAsync(value.Id, _pendingChannelSelection);
+                _pendingChannelSelection = null;
             }
             else
             {
+                IsServerSettingsOpen = false;
+                ServerSettingsName = string.Empty;
+                ServerSettingsInviteCode = string.Empty;
                 Channels.Clear();
+                SelectedChannel = null;
                 Messages.Clear();
             }
         }
 
-        private async Task LoadChannelsAsync(Guid serverId)
+        private async Task LoadChannelsAsync(Guid serverId, Guid? channelToSelect = null)
         {
             var serverChannels = await _db.Channels
                 .Where(c => c.ServerId == serverId)
@@ -101,8 +180,23 @@ namespace SMWYG
                 Channels.Add(channel);
             }
 
-            // Auto-select first text channel
-            SelectedChannel = Channels.FirstOrDefault(c => c.Type == "text") ?? Channels.FirstOrDefault();
+            Channel? nextChannel = null;
+            if (channelToSelect.HasValue)
+            {
+                nextChannel = Channels.FirstOrDefault(c => c.Id == channelToSelect.Value);
+            }
+
+            if (nextChannel == null)
+            {
+                nextChannel = Channels.FirstOrDefault(c => c.Type == "text") ?? Channels.FirstOrDefault();
+            }
+
+            SelectedChannel = nextChannel;
+
+            if (nextChannel == null)
+            {
+                Messages.Clear();
+            }
         }
 
         // When a channel is selected → load messages if it's a text channel
@@ -189,8 +283,144 @@ namespace SMWYG
 
             await _db.SaveChangesAsync();
 
-            Servers.Add(newServer);
-            SelectedServer = newServer; // Auto-select the new server
+            await ReloadServersPreservingSelectionAsync(newServer.Id);
+        }
+
+        [RelayCommand]
+        private async Task UpdateServerIconAsync()
+        {
+            if (SelectedServer == null)
+            {
+                MessageBox.Show("Select a server first.", "No Server", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var dialog = new OpenFileDialog
+            {
+                Filter = "Image Files|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp",
+                Title = "Select Server Icon"
+            };
+
+            bool? result = dialog.ShowDialog();
+            if (result != true)
+                return;
+
+            var serverEntity = await _db.Servers.FirstOrDefaultAsync(s => s.Id == SelectedServer.Id);
+            if (serverEntity == null)
+            {
+                MessageBox.Show("Server no longer exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                await LoadServersAsync();
+                return;
+            }
+
+            string iconsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ServerIcons");
+            Directory.CreateDirectory(iconsDirectory);
+
+            string extension = Path.GetExtension(dialog.FileName);
+            string fileName = $"{serverEntity.Id}{extension}";
+            string destinationPath = Path.Combine(iconsDirectory, fileName);
+            File.Copy(dialog.FileName, destinationPath, true);
+
+            string relativePath = Path.Combine("ServerIcons", fileName).Replace("\\", "/");
+            serverEntity.Icon = relativePath;
+            await _db.SaveChangesAsync();
+
+            _pendingChannelSelection = SelectedChannel?.Id;
+            await ReloadServersPreservingSelectionAsync(serverEntity.Id);
+        }
+
+        [RelayCommand]
+        private async Task CreateChannelAsync()
+        {
+            if (SelectedServer == null)
+            {
+                MessageBox.Show("Select a server first.", "No Server", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var dialog = new AddChannelDialog(SelectedChannel?.Type ?? "text")
+            {
+                Owner = Application.Current?.MainWindow
+            };
+
+            bool? result = dialog.ShowDialog();
+            if (result != true)
+                return;
+
+            string channelName = dialog.ChannelName;
+            if (string.IsNullOrWhiteSpace(channelName))
+                return;
+
+            string channelType = dialog.ChannelType;
+
+            bool nameExists = await _db.Channels.AnyAsync(c => c.ServerId == SelectedServer.Id && c.Name.ToLower() == channelName.ToLower());
+            if (nameExists)
+            {
+                MessageBox.Show("Channel name already exists for this server.", "Duplicate Name", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            int nextPosition = (await _db.Channels
+                .Where(c => c.ServerId == SelectedServer.Id)
+                .Select(c => (int?)c.Position)
+                .MaxAsync()) ?? -1;
+
+            var newChannel = new Channel
+            {
+                Id = Guid.NewGuid(),
+                ServerId = SelectedServer.Id,
+                Name = channelName,
+                Type = channelType,
+                Position = nextPosition + 1,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _db.Channels.Add(newChannel);
+            await _db.SaveChangesAsync();
+
+            await LoadChannelsAsync(SelectedServer.Id, newChannel.Id);
+        }
+
+        [RelayCommand]
+        private async Task RenameChannelAsync()
+        {
+            if (SelectedServer == null || SelectedChannel == null)
+            {
+                MessageBox.Show("Select a channel first.", "No Channel", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string? newName = Microsoft.VisualBasic.Interaction.InputBox(
+                "Enter the new channel name:", "Rename Channel", SelectedChannel.Name);
+            if (string.IsNullOrWhiteSpace(newName))
+                return;
+
+            newName = newName.Trim();
+            if (newName.Equals(SelectedChannel.Name, StringComparison.Ordinal))
+                return;
+
+            bool duplicate = await _db.Channels.AnyAsync(c =>
+                c.ServerId == SelectedServer.Id &&
+                c.Id != SelectedChannel.Id &&
+                c.Name.ToLower() == newName.ToLower());
+            if (duplicate)
+            {
+                MessageBox.Show("Channel name already exists for this server.", "Duplicate Name", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var channelEntity = await _db.Channels.FirstOrDefaultAsync(c => c.Id == SelectedChannel.Id);
+            if (channelEntity == null)
+            {
+                MessageBox.Show("Channel no longer exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                await LoadChannelsAsync(SelectedServer.Id);
+                return;
+            }
+
+            channelEntity.Name = newName;
+            await _db.SaveChangesAsync();
+
+            await LoadChannelsAsync(SelectedServer.Id, channelEntity.Id);
         }
 
         // Send a message (Enter key in input box)
@@ -220,6 +450,7 @@ namespace SMWYG
         [RelayCommand]
         private void SelectServer(Server server)
         {
+            _pendingChannelSelection = SelectedChannel?.Id;
             SelectedServer = server;
         }
 
@@ -228,6 +459,257 @@ namespace SMWYG
         private void SelectChannel(Channel channel)
         {
             SelectedChannel = channel;
+        }
+
+        [RelayCommand]
+        private async Task DeleteServerAsync()
+        {
+            if (SelectedServer == null)
+            {
+                MessageBox.Show("Select a server first.", "No Server", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var confirmation = MessageBox.Show(
+                $"Delete server '{SelectedServer.Name}'? All channels and messages will be removed.",
+                "Delete Server",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (confirmation != MessageBoxResult.Yes)
+                return;
+
+            var serverEntity = await _db.Servers.FirstOrDefaultAsync(s => s.Id == SelectedServer.Id);
+            if (serverEntity == null)
+            {
+                MessageBox.Show("Server no longer exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                await LoadServersAsync();
+                return;
+            }
+
+            _db.Servers.Remove(serverEntity);
+            await _db.SaveChangesAsync();
+
+            await LoadServersAsync();
+        }
+
+        [RelayCommand]
+        private async Task DeleteChannelAsync()
+        {
+            if (SelectedServer == null || SelectedChannel == null)
+            {
+                MessageBox.Show("Select a channel first.", "No Channel", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var confirmation = MessageBox.Show(
+                $"Delete channel '{SelectedChannel.Name}'? Messages inside it will be removed.",
+                "Delete Channel",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (confirmation != MessageBoxResult.Yes)
+                return;
+
+            var channelEntity = await _db.Channels.FirstOrDefaultAsync(c => c.Id == SelectedChannel.Id);
+            if (channelEntity == null)
+            {
+                MessageBox.Show("Channel no longer exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                await LoadChannelsAsync(SelectedServer.Id);
+                return;
+            }
+
+            _db.Channels.Remove(channelEntity);
+            await _db.SaveChangesAsync();
+
+            await LoadChannelsAsync(SelectedServer.Id);
+        }
+
+        private void UpdateServerSettingsSnapshot(Server server)
+        {
+            ServerSettingsName = server.Name;
+            ServerSettingsInviteCode = GenerateInviteCode(server.Id);
+        }
+
+        private static string GenerateInviteCode(Guid serverId)
+        {
+            var compact = serverId.ToString("N").ToUpperInvariant();
+            return compact.Substring(0, Math.Min(8, compact.Length));
+        }
+
+        private Task ReloadServersPreservingSelectionAsync(Guid serverId)
+        {
+            SelectedServer = null;
+            return PopulateServersAsync(serverId);
+        }
+
+        [RelayCommand]
+        private void ToggleServerSettings()
+        {
+            if (SelectedServer == null)
+            {
+                MessageBox.Show("Select a server first.", "No Server", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (!IsServerSettingsOpen)
+            {
+                UpdateServerSettingsSnapshot(SelectedServer);
+            }
+
+            IsServerSettingsOpen = !IsServerSettingsOpen;
+        }
+
+        [RelayCommand]
+        private void CloseServerSettings()
+        {
+            IsServerSettingsOpen = false;
+        }
+
+        [RelayCommand]
+        private async Task SaveServerSettingsAsync()
+        {
+            if (SelectedServer == null)
+            {
+                MessageBox.Show("Select a server first.", "No Server", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(ServerSettingsName))
+            {
+                MessageBox.Show("Server name cannot be empty.", "Validation", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            string trimmedName = ServerSettingsName.Trim();
+            if (trimmedName.Equals(SelectedServer.Name, StringComparison.Ordinal))
+            {
+                IsServerSettingsOpen = false;
+                return;
+            }
+
+            var serverEntity = await _db.Servers.FirstOrDefaultAsync(s => s.Id == SelectedServer.Id);
+            if (serverEntity == null)
+            {
+                MessageBox.Show("Server no longer exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                await LoadServersAsync();
+                return;
+            }
+
+            serverEntity.Name = trimmedName;
+            await _db.SaveChangesAsync();
+
+            _pendingChannelSelection = SelectedChannel?.Id;
+            await ReloadServersPreservingSelectionAsync(serverEntity.Id);
+            IsServerSettingsOpen = false;
+        }
+
+        [RelayCommand]
+        private void ToggleUserSettings()
+        {
+            if (!IsUserSettingsOpen)
+            {
+                UserSettingsUsername = currentUser.Username;
+                UserSettingsProfilePicturePath = currentUser.ProfilePicture;
+            }
+
+            IsUserSettingsOpen = !IsUserSettingsOpen;
+        }
+
+        [RelayCommand]
+        private void CloseUserSettings()
+        {
+            IsUserSettingsOpen = false;
+        }
+
+        [RelayCommand]
+        private async Task SaveUserSettingsAsync()
+        {
+            if (string.IsNullOrWhiteSpace(UserSettingsUsername))
+            {
+                MessageBox.Show("Username cannot be empty.", "Validation", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            string trimmed = UserSettingsUsername.Trim();
+            if (trimmed.Equals(currentUser.Username, StringComparison.Ordinal))
+            {
+                IsUserSettingsOpen = false;
+                return;
+            }
+
+            var userEntity = await _db.Users.FirstOrDefaultAsync(u => u.Id == currentUser.Id);
+            if (userEntity == null)
+            {
+                MessageBox.Show("User not found.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            bool duplicate = await _db.Users.AnyAsync(u => u.Id != currentUser.Id && u.Username.ToLower() == trimmed.ToLower());
+            if (duplicate)
+            {
+                MessageBox.Show("Username already exists.", "Conflict", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            userEntity.Username = trimmed;
+            currentUser.Username = trimmed;
+            await _db.SaveChangesAsync();
+
+            UserSettingsUsername = trimmed;
+            OnPropertyChanged(nameof(CurrentUser));
+            IsUserSettingsOpen = false;
+        }
+
+        [RelayCommand]
+        private async Task UpdateUserProfilePictureAsync()
+        {
+            var dialog = new OpenFileDialog
+            {
+                Filter = "Image Files|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp",
+                Title = "Select Profile Picture"
+            };
+
+            bool? result = dialog.ShowDialog();
+            if (result != true)
+                return;
+
+            var userEntity = await _db.Users.FirstOrDefaultAsync(u => u.Id == currentUser.Id);
+            if (userEntity == null)
+            {
+                MessageBox.Show("User not found.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            string profilesDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ProfilePictures");
+            Directory.CreateDirectory(profilesDirectory);
+
+            string extension = Path.GetExtension(dialog.FileName);
+            string fileName = $"{currentUser.Id}{extension}";
+            string destinationPath = Path.Combine(profilesDirectory, fileName);
+            File.Copy(dialog.FileName, destinationPath, true);
+
+            string relativePath = Path.Combine("ProfilePictures", fileName).Replace("\\", "/");
+            userEntity.ProfilePicture = relativePath;
+            currentUser.ProfilePicture = relativePath;
+            await _db.SaveChangesAsync();
+
+            UserSettingsProfilePicturePath = relativePath;
+            OnPropertyChanged(nameof(CurrentUser));
+        }
+
+        [RelayCommand]
+        private Task LogoutAsync()
+        {
+            Servers.Clear();
+            Channels.Clear();
+            Messages.Clear();
+            SelectedServer = null;
+            SelectedChannel = null;
+            MessageInput = string.Empty;
+            IsUserSettingsOpen = false;
+            MessageBox.Show("Logged out (placeholder until auth flow is built).", "Logout", MessageBoxButton.OK, MessageBoxImage.Information);
+            return Task.CompletedTask;
         }
     }
 }

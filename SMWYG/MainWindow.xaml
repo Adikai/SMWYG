@@ -8,6 +8,8 @@
 
     <Window.Resources>
         <converters:StringToInitialsConverter x:Key="StringToInitialsConverter"/>
+        <converters:RelativePathToImageConverter x:Key="RelativePathToImageConverter"/>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
     </Window.Resources>
 
     <Grid>
@@ -47,14 +49,42 @@
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
                             <Button Width="48" Height="48" Margin="0,8"
-                                    Background="{Binding AccentColor, FallbackValue=#5865F2}"
+                                    Background="#5865F2"
                                     Command="{Binding DataContext.SelectServerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                     CommandParameter="{Binding}"
                                     ToolTip="{Binding Name}">
                                 <Button.Content>
-                                    <TextBlock Text="{Binding Name, Converter={StaticResource StringToInitialsConverter}}"
-                                               Foreground="White" FontWeight="Bold"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <Grid ClipToBounds="True">
+                                        <Image Source="{Binding Icon, Converter={StaticResource RelativePathToImageConverter}}" Stretch="UniformToFill">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <Trigger Property="Source" Value="{x:Null}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </Trigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Image.Style>
+                                        </Image>
+                                        <TextBlock Text="{Binding Name, Converter={StaticResource StringToInitialsConverter}}"
+                                                   Foreground="White" FontWeight="Bold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Icon}" Value="">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
                                 </Button.Content>
                             </Button>
                         </DataTemplate>
@@ -69,6 +99,47 @@
             <StackPanel Margin="12,16,12,0">
                 <TextBlock Text="{Binding SelectedServer.Name, StringFormat='{}Server: {0}'}"
                            Foreground="White" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,12"/>
+
+                <Button Content="Server Settings" Command="{Binding ToggleServerSettingsCommand}"
+                        Padding="8,6" Margin="0,0,0,12"
+                        Background="#5865F2" Foreground="White" BorderThickness="0"/>
+
+                <Border Background="#202225" Padding="12" CornerRadius="8" Margin="0,0,0,16"
+                        Visibility="{Binding IsServerSettingsOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="✕" Width="24" Height="24"
+                                    Command="{Binding CloseServerSettingsCommand}"
+                                    Background="Transparent" Foreground="#B9BBBE" BorderBrush="#B9BBBE"/>
+                        </StackPanel>
+                        <TextBlock Text="Invite Code" Foreground="#B9BBBE" FontSize="12"/>
+                        <TextBox Text="{Binding ServerSettingsInviteCode}" IsReadOnly="True" Margin="0,4,0,12"
+                                 Background="#2F3136" Foreground="White" BorderBrush="#40444B"/>
+                        <TextBlock Text="Server Name" Foreground="#B9BBBE" FontSize="12"/>
+                        <TextBox Text="{Binding ServerSettingsName, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,12"
+                                 Background="#2F3136" Foreground="White" BorderBrush="#40444B"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                            <Button Content="Save" Command="{Binding SaveServerSettingsCommand}"
+                                    Padding="8,4" Margin="0,0,8,0"
+                                    Background="#3BA55D" Foreground="White" BorderThickness="0"/>
+                            <Button Content="Change Icon" Command="{Binding UpdateServerIconCommand}"
+                                    Padding="8,4"
+                                    Background="#7289DA" Foreground="White" BorderThickness="0"/>
+                        </StackPanel>
+                        <Button Content="Delete Server" Command="{Binding DeleteServerCommand}"
+                                Padding="8,4"
+                                Background="#D83C3E" Foreground="White" BorderThickness="0"/>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                    <Button Content="Add Channel" Command="{Binding CreateChannelCommand}"
+                            Padding="8,4" Margin="0,0,8,0"
+                            Background="#3BA55D" Foreground="White" BorderThickness="0"/>
+                    <Button Content="Remove Channel" Command="{Binding DeleteChannelCommand}"
+                            Padding="8,4"
+                            Background="#D83C3E" Foreground="White" BorderThickness="0"/>
+                </StackPanel>
 
                 <ItemsControl ItemsSource="{Binding Channels}">
                     <ItemsControl.ItemTemplate>
@@ -142,7 +213,8 @@
 
                 <StackPanel Grid.Column="0" Orientation="Horizontal"
                             VerticalAlignment="Center" Margin="16,0">
-                    <Image Source="Assets/avatar.png" Width="32" Height="32" Stretch="UniformToFill"/>
+                    <Image Width="32" Height="32" Stretch="UniformToFill"
+                           Source="{Binding CurrentUser.ProfilePicture, Converter={StaticResource RelativePathToImageConverter}, FallbackValue=Assets/avatar.png, TargetNullValue=Assets/avatar.png}"/>
                     <StackPanel Margin="8,0">
                         <TextBlock Text="{Binding CurrentUser.Username}" Foreground="White" FontWeight="SemiBold"/>
                         <TextBlock Text="#1234" Foreground="#72767D" FontSize="12"/>
@@ -153,9 +225,40 @@
                             HorizontalAlignment="Left" VerticalAlignment="Center" Margin="1128,0,0,0" Height="59">
                     <Button Content="🎤" Width="40" Height="40" Margin="4"/>
                     <Button Content="🎧" Width="40" Height="40" Margin="4"/>
-                    <Button Content="⚙️" Width="40" Height="40" Margin="4"/>
+                    <Button Content="⚙️" Width="40" Height="40" Margin="4"
+                            Command="{Binding ToggleUserSettingsCommand}"/>
                 </StackPanel>
             </Grid>
+        </Border>
+
+        <Border Grid.ColumnSpan="3" Grid.RowSpan="2"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                Margin="0,0,32,96" Padding="16"
+                Background="#2F3136" BorderBrush="#1E1F22" BorderThickness="1"
+                CornerRadius="8" Panel.ZIndex="20"
+                Visibility="{Binding IsUserSettingsOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <StackPanel Width="320">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="✕" Width="28" Height="28" Margin="0,0,0,8"
+                            Command="{Binding CloseUserSettingsCommand}"
+                            Background="Transparent" Foreground="#B9BBBE" BorderBrush="#B9BBBE"/>
+                </StackPanel>
+                <TextBlock Text="User Settings" FontSize="16" FontWeight="SemiBold" Foreground="White" Margin="0,0,0,12"/>
+                <Image Height="80" Width="80" Stretch="UniformToFill" Margin="0,0,0,12"
+                       Source="{Binding UserSettingsProfilePicturePath, Converter={StaticResource RelativePathToImageConverter}, FallbackValue=Assets/avatar.png, TargetNullValue=Assets/avatar.png}"/>
+                <Button Content="Change Profile Picture" Command="{Binding UpdateUserProfilePictureCommand}"
+                        Padding="8,4" Margin="0,0,0,16"
+                        Background="#7289DA" Foreground="White" BorderThickness="0"/>
+                <TextBlock Text="Username" Foreground="#B9BBBE" FontSize="12"/>
+                <TextBox Text="{Binding UserSettingsUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,12"
+                         Background="#40444B" Foreground="White" BorderBrush="#292B2F"/>
+                <Button Content="Save" Command="{Binding SaveUserSettingsCommand}"
+                        Padding="8,4" Margin="0,0,0,12"
+                        Background="#3BA55D" Foreground="White" BorderThickness="0"/>
+                <Button Content="Logout" Command="{Binding LogoutCommand}"
+                        Padding="8,4"
+                        Background="#D83C3E" Foreground="White" BorderThickness="0"/>
+            </StackPanel>
         </Border>
     </Grid>
 </Window>
