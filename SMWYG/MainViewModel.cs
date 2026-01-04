@@ -10,6 +10,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using System.Windows;
 
@@ -31,6 +32,13 @@ namespace SMWYG
         [ObservableProperty]
         private ObservableCollection<Message> messages = new();
 
+        private ObservableCollection<InviteToken> inviteTokens = new();
+        public ObservableCollection<InviteToken> InviteTokens
+        {
+            get => inviteTokens;
+            set => SetProperty(ref inviteTokens, value);
+        }
+
         // Selected items
         [ObservableProperty]
         private Server? selectedServer;
@@ -41,6 +49,27 @@ namespace SMWYG
         // Input
         [ObservableProperty]
         private string messageInput = string.Empty;
+
+        private bool isInviteManagerOpen;
+        public bool IsInviteManagerOpen
+        {
+            get => isInviteManagerOpen;
+            set => SetProperty(ref isInviteManagerOpen, value);
+        }
+
+        private string inviteMaxUsesInput = "1";
+        public string InviteMaxUsesInput
+        {
+            get => inviteMaxUsesInput;
+            set => SetProperty(ref inviteMaxUsesInput, value);
+        }
+
+        private string inviteExpiryDaysInput = "7";
+        public string InviteExpiryDaysInput
+        {
+            get => inviteExpiryDaysInput;
+            set => SetProperty(ref inviteExpiryDaysInput, value);
+        }
 
         private bool isServerSettingsOpen;
         public bool IsServerSettingsOpen
@@ -88,7 +117,8 @@ namespace SMWYG
         private readonly User currentUser = new User
         {
             Id = Guid.Parse("00000000-0000-0000-0000-000000000001"), // Placeholder
-            Username = "Adhil"
+            Username = "Adhil",
+            IsAdmin = true
         };
 
         public User CurrentUser => currentUser;
@@ -99,6 +129,36 @@ namespace SMWYG
             _config = config;
             UserSettingsUsername = currentUser.Username;
             UserSettingsProfilePicturePath = currentUser.ProfilePicture;
+
+            // Load persisted user data (profile picture, username, isAdmin) from DB
+            _ = LoadCurrentUserAsync();
+        }
+
+        private async Task LoadCurrentUserAsync()
+        {
+            try
+            {
+                var userEntity = await _db.Users.FirstOrDefaultAsync(u => u.Id == currentUser.Id);
+                if (userEntity != null)
+                {
+                    // Ensure UI updates happen on UI thread
+                    Application.Current?.Dispatcher.Invoke(() =>
+                    {
+                        currentUser.Username = userEntity.Username;
+                        currentUser.ProfilePicture = userEntity.ProfilePicture;
+                        currentUser.IsAdmin = userEntity.IsAdmin;
+
+                        UserSettingsUsername = currentUser.Username;
+                        UserSettingsProfilePicturePath = currentUser.ProfilePicture;
+
+                        OnPropertyChanged(nameof(CurrentUser));
+                    });
+                }
+            }
+            catch
+            {
+                // ignore load errors for now
+            }
         }
 
         // Load all servers the current user is a member of
@@ -446,6 +506,130 @@ namespace SMWYG
             MessageInput = string.Empty;
         }
 
+        [RelayCommand]
+        private async Task ToggleInviteManagerAsync()
+        {
+            if (!currentUser.IsAdmin)
+            {
+                MessageBox.Show("Admin access required.", "Restricted", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (!IsInviteManagerOpen)
+            {
+                await LoadInviteTokensAsync();
+                IsInviteManagerOpen = true;
+            }
+            else
+            {
+                IsInviteManagerOpen = false;
+            }
+        }
+
+        [RelayCommand]
+        private async Task CreateInviteTokenAsync()
+        {
+            if (!currentUser.IsAdmin)
+            {
+                MessageBox.Show("Admin access required.", "Restricted", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            int maxUses = ParseIntOrDefault(InviteMaxUsesInput, 1, 1);
+            int expiryDays = ParseIntOrDefault(InviteExpiryDaysInput, 7, 0);
+            DateTime? expiresAt = expiryDays > 0 ? DateTime.UtcNow.AddDays(expiryDays) : null;
+
+            var token = new InviteToken
+            {
+                Id = Guid.NewGuid(),
+                Token = GenerateSecureInviteToken(),
+                CreatedBy = currentUser.Id,
+                CreatedAt = DateTime.UtcNow,
+                MaxUses = maxUses,
+                ExpiresAt = expiresAt,
+                IsUsed = false
+            };
+
+            _db.InviteTokens.Add(token);
+            await _db.SaveChangesAsync();
+
+            InviteMaxUsesInput = maxUses.ToString();
+            InviteExpiryDaysInput = expiryDays > 0 ? expiryDays.ToString() : "0";
+
+            await LoadInviteTokensAsync();
+        }
+
+        [RelayCommand]
+        private async Task RevokeInviteTokenAsync(InviteToken? token)
+        {
+            if (token == null)
+                return;
+
+            if (!currentUser.IsAdmin)
+            {
+                MessageBox.Show("Admin access required.", "Restricted", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var entity = await _db.InviteTokens.FirstOrDefaultAsync(t => t.Id == token.Id);
+            if (entity == null)
+            {
+                MessageBox.Show("Invite token not found.", "Missing", MessageBoxButton.OK, MessageBoxImage.Warning);
+                await LoadInviteTokensAsync();
+                return;
+            }
+
+            if (entity.IsUsed)
+            {
+                MessageBox.Show("Invite token is already used or revoked.", "Info", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            entity.IsUsed = true;
+            entity.ExpiresAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+
+            await LoadInviteTokensAsync();
+        }
+
+        private async Task LoadInviteTokensAsync()
+        {
+            var items = await _db.InviteTokens
+                .OrderByDescending(t => t.CreatedAt)
+                .Take(100)
+                .ToListAsync();
+
+            InviteTokens.Clear();
+            foreach (var token in items)
+            {
+                InviteTokens.Add(token);
+            }
+        }
+
+        private static string GenerateSecureInviteToken(int length = 20)
+        {
+            const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+            Span<char> chars = stackalloc char[length];
+            Span<byte> random = stackalloc byte[length];
+            RandomNumberGenerator.Fill(random);
+            for (int i = 0; i < length; i++)
+            {
+                chars[i] = alphabet[random[i] % alphabet.Length];
+            }
+
+            return new string(chars);
+        }
+
+        private static int ParseIntOrDefault(string? input, int fallback, int minValue)
+        {
+            if (int.TryParse(input, out var parsed) && parsed >= minValue)
+            {
+                return parsed;
+            }
+
+            return fallback;
+        }
+
         // Optional: Select server via command from sidebar buttons
         [RelayCommand]
         private void SelectServer(Server server)
@@ -704,12 +888,58 @@ namespace SMWYG
             Servers.Clear();
             Channels.Clear();
             Messages.Clear();
+            InviteTokens.Clear();
             SelectedServer = null;
             SelectedChannel = null;
             MessageInput = string.Empty;
             IsUserSettingsOpen = false;
+            IsInviteManagerOpen = false;
             MessageBox.Show("Logged out (placeholder until auth flow is built).", "Logout", MessageBoxButton.OK, MessageBoxImage.Information);
             return Task.CompletedTask;
+        }
+
+        private bool copyNotificationVisible;
+        public bool CopyNotificationVisible
+        {
+            get => copyNotificationVisible;
+            set => SetProperty(ref copyNotificationVisible, value);
+        }
+
+        private string copyNotificationText = string.Empty;
+        public string CopyNotificationText
+        {
+            get => copyNotificationText;
+            set => SetProperty(ref copyNotificationText, value);
+        }
+
+        private bool copyNotificationIsError;
+        public bool CopyNotificationIsError
+        {
+            get => copyNotificationIsError;
+            set => SetProperty(ref copyNotificationIsError, value);
+        }
+
+        [RelayCommand]
+        private async void CopyInviteToken(string? token)
+        {
+            if (string.IsNullOrEmpty(token))
+                return;
+
+            try
+            {
+                Clipboard.SetText(token);
+                CopyNotificationText = "Token copied to clipboard";
+                CopyNotificationIsError = false;
+            }
+            catch
+            {
+                CopyNotificationText = "Failed to copy token";
+                CopyNotificationIsError = true;
+            }
+
+            CopyNotificationVisible = true;
+            await Task.Delay(1800);
+            CopyNotificationVisible = false;
         }
     }
 }
