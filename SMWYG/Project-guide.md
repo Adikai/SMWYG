@@ -1,9 +1,10 @@
-﻿This is a discord-clone application that is meant for streaming.
+﻿This is a discord-clone application that is meant for streaming. Using WPF and dotnet 10 for the client side and ASP.NET Core for the backend API.
 It uses a postgresSQL DB to store user data and streams.
+Deployment would be on Docker containers. 
 
 Things this App should do:
 
-  * Allow super admins to generate invite tokens that users can use to register/login. No Authentication system beyond this.
+  * Allow super admins to create Users and passwords for users. Give the user the ability to change their password on first login. via an Super Admin Panel.
   * Allow users to create and join "servers" (like Discord servers).
   * Allow users to create text channels within servers for chat.
   * Allow users to send and receive messages in text channels.
@@ -15,8 +16,56 @@ Things this App should do:
   * Allow users to to customize their server with icons and change the Server Names.
   * Allow server owners to manage members (e.g., promote to admin, kick).
   
-Implement the database schema to support these features.
-Implement the above requirements in phases, start with a Admin panel to generate invite tokens, then user registration/login, then server and channel creation, and so on.
+Implement changes to the database schema to support these features.
+Implement the above requirements in phases, start with a Super Admin panel, then user registration/login, then server and channel creation, and so on.
+Check with the user after each phase to ensure the requirements are being met.
+
+Phase one: Server Creation and Customization
+Allow the users to create servers and customize them with names and icons.
+Allow the users to create/rename channels within those servers.
+Two types of channels: text channels (for chat) and voice channels (for streaming calls and video).
+
+Phase two: User Management Panel
+Allow super admins to generate invite tokens that users can use to register/login.
+Allow users to have profile pictures and display names.
+Allow super admins to also delete users if necessary.
+
+Phase three: Messaging System
+Allow users to send and receive messages in text channels.
+Each server can have multiple text channels, but to keep things simple, no direct messages between users for now.
+Allow users to uploqad gifs and images in text channels as well as use emojies.
+Use the following Technology for the messaging system:
+  * SignalR for real-time messaging.
+  * Store messages in PostgresSQL with timestamps and author info.
+  * Use local file storage for storing uploaded images/gifs.
+  * All messages should be retrievable when a user joins a channel (load last 100 messages for now).
+  * Delete messages after 30 days automatically (background job).
+
+Phase four: Voice Streaming System
+Allow users to create voice channels within servers for streaming calls.
+Voice channels should allow all users to join and leave the stream.
+Once you click on a voice channel, you should be streaming your audio to all other users in that channel.
+Have a button that allows users to leave the voice channel and stop streaming.
+
+Phase five: Video Streaming System (Do absolutely last)
+Allow users to stream video (share their screen) in voice channels as well as audio.
+Allow users to choose the quality of their stream (e.g., 720p, 1080p). Use Adaptive Bitrate Streaming if possible so that if connection is bad, lower quality is used automatically.
+Allow multiple users to stream video in the same voice channel (like a group video call).
+Allow users to see who is currently streaming in the voice channel.
+Allow users to stop/start their video stream as needed.
+Allow  users to pick a Window or screen to share when streaming video.
+For simplicity, we will not implement recording or saving of streams for now.
+
+Use the following Technology for the video streaming system:
+  * WebRTC for real-time communication.
+  * SIPSorcery
+  * A signaling server to coordinate connections between users. (like signalR)
+  * STUN/TURN servers to handle NAT traversal. Free is better and make sure we can self host if needed. Use existing ones for now.
+
+
+Flow of UI:
+When the app starts, show a login screen with username and password fields.
+Once logged in, show a list of servers the user is a member of. If no servers, show a place holder page.
 
 Here is the PostgresSQL schema for the application:
 ```sql
