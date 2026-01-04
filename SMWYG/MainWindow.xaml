@@ -52,7 +52,7 @@
                                     CommandParameter="{Binding}"
                                     ToolTip="{Binding Name}">
                                 <Button.Content>
-                                    <TextBlock Text="{Binding Name, Converter={StaticResource InitialsConverter}}"
+                                    <TextBlock Text="{Binding Name, Converter={StaticResource StringToInitialsConverter}}"
                                                Foreground="White" FontWeight="Bold"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Button.Content>
@@ -80,8 +80,8 @@
                                     Command="{Binding DataContext.SelectChannelCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                     CommandParameter="{Binding}">
                                 <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="{Binding Type, Converter={StaticResource ChannelTypeToIconConverter}}"
-                                               Margin="0,0,8,0"/>
+                                    <!--<TextBlock Text="{Binding Type, Converter={StaticResource ChannelTypeToIconConverter}}"
+                                               Margin="0,0,8,0"/>-->
                                     <TextBlock Text="{Binding Name}"/>
                                 </StackPanel>
                             </Button>
@@ -150,7 +150,7 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal"
-                            HorizontalAlignment="Right" VerticalAlignment="Center" Margin="16">
+                            HorizontalAlignment="Left" VerticalAlignment="Center" Margin="1128,0,0,0" Height="59">
                     <Button Content="🎤" Width="40" Height="40" Margin="4"/>
                     <Button Content="🎧" Width="40" Height="40" Margin="4"/>
                     <Button Content="⚙️" Width="40" Height="40" Margin="4"/>

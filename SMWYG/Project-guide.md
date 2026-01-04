@@ -1,6 +1,23 @@
 ﻿This is a discord-clone application that is meant for streaming.
 It uses a postgresSQL DB to store user data and streams.
 
+Things this App should do:
+
+  * Allow super admins to generate invite tokens that users can use to register/login. No Authentication system beyond this.
+  * Allow users to create and join "servers" (like Discord servers).
+  * Allow users to create text channels within servers for chat.
+  * Allow users to send and receive messages in text channels.
+  * Allow users to send gifs and images in text channels.
+  * Allow users to create voice channels within servers for streaming calls.
+  * Allow users to start and stop streaming in voice channels.
+  * Allow users to stream in a variety of quality settings (e.g., 720p, 1080p).
+  * Allow Users to have profile pictures and display names.
+  * Allow users to to customize their server with icons and change the Server Names.
+  * Allow server owners to manage members (e.g., promote to admin, kick).
+  
+Implement the database schema to support these features.
+Implement the above requirements in phases, start with a Admin panel to generate invite tokens, then user registration/login, then server and channel creation, and so on.
+
 Here is the PostgresSQL schema for the application:
 ```sql
 -- Enable UUID extension (for generating unique IDs)
