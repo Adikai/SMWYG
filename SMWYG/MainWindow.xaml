@@ -145,22 +145,51 @@
                 <ItemsControl ItemsSource="{Binding Channels}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Button HorizontalContentAlignment="Left"
-                                    Background="Transparent"
-                                    Foreground="#B9BBBE"
-                                    Padding="10,6"
-                                    Margin="0,0,0,8"
-                                    Command="{Binding DataContext.SelectChannelCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                    CommandParameter="{Binding}">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding Type, Converter={StaticResource ChannelTypeToIconConverter}}"
-                                               Foreground="#72767D"
-                                               FontWeight="Bold"
-                                               FontFamily="Segoe UI Symbol"
-                                               Margin="0,0,8,0"/>
-                                    <TextBlock Text="{Binding Name}"/>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <Button Grid.Column="0"
+                                        HorizontalContentAlignment="Left"
+                                        Background="Transparent"
+                                        Foreground="#B9BBBE"
+                                        Padding="10,6"
+                                        Command="{Binding DataContext.SelectChannelCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                        CommandParameter="{Binding}">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Type, Converter={StaticResource ChannelTypeToIconConverter}}"
+                                                   Foreground="#72767D"
+                                                   FontWeight="Bold"
+                                                   FontFamily="Segoe UI Symbol"
+                                                   Margin="0,0,8,0"/>
+                                        <TextBlock Text="{Binding Name}"/>
+                                    </StackPanel>
+                                </Button>
+
+                                <StackPanel Grid.Column="1" Orientation="Vertical" Margin="8,0,0,0">
+                                    <Button Content="▲"
+                                            Width="32"
+                                            Height="22"
+                                            Margin="0,0,0,4"
+                                            Padding="0"
+                                            Background="#40444B"
+                                            Foreground="White"
+                                            BorderBrush="#202225"
+                                            Command="{Binding DataContext.MoveChannelUpCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}"/>
+                                    <Button Content="▼"
+                                            Width="32"
+                                            Height="22"
+                                            Padding="0"
+                                            Background="#40444B"
+                                            Foreground="White"
+                                            BorderBrush="#202225"
+                                            Command="{Binding DataContext.MoveChannelDownCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}"/>
                                 </StackPanel>
-                            </Button>
+                            </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
@@ -286,10 +315,10 @@
                             Command="{Binding ToggleInviteManagerCommand}"
                             Background="Transparent" Foreground="#B9BBBE" BorderBrush="#B9BBBE"/>
                 </StackPanel>
-                <TextBlock Text="Super Admin · Invite Tokens" FontSize="16" FontWeight="SemiBold" Foreground="White"/>
+                <TextBlock Text="Super Admin · Invite Tokens &amp; Users" FontSize="16" FontWeight="SemiBold" Foreground="White"/>
                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                     <StackPanel Width="200">
-                        <TextBlock Text="Max Uses" Foreground="#B9BBBE" FontSize="12"/>
+                        <TextBlock Text="Uses Remaining" Foreground="#B9BBBE" FontSize="12"/>
                         <TextBox Text="{Binding InviteMaxUsesInput, UpdateSourceTrigger=PropertyChanged}"
                                  Background="#40444B" Foreground="White" BorderBrush="#292B2F"/>
                     </StackPanel>
@@ -302,6 +331,96 @@
                 <Button Content="Generate Invite Token" Command="{Binding CreateInviteTokenCommand}"
                         Padding="8,6" Margin="0,12,0,0"
                         Background="#3BA55D" Foreground="White" BorderThickness="0"/>
+
+                <!-- New: Users Management Section -->
+                <TextBlock Text="Users" FontSize="14" FontWeight="SemiBold" Foreground="White" Margin="0,12,0,6"/>
+                <Border Background="#1E1F22" Padding="8" CornerRadius="6" Height="220">
+                    <ScrollViewer>
+                        <ItemsControl ItemsSource="{Binding AdminUsers}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,0,0,8" Padding="0,0,0,8" BorderThickness="0,0,0,1" BorderBrush="#2F3136">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Image Grid.Column="0" Width="32" Height="32" Stretch="UniformToFill"
+                                                    Source="{Binding ProfilePicture, Converter={StaticResource RelativePathToImageConverter}, FallbackValue=Assets/avatar.png, TargetNullValue=Assets/avatar.png}"/>
+                                            <StackPanel Grid.Column="1" Margin="8,0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Username}" Foreground="White" FontWeight="SemiBold"/>
+                                                <TextBlock Text="{Binding CreatedAt, StringFormat='{}{0:yyyy-MM-dd}'}" Foreground="#B9BBBE" FontSize="11"/>
+                                                <TextBlock FontSize="11">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="Status: Active"/>
+                                                            <Setter Property="Foreground" Value="#B9BBBE"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsDeactivated}" Value="True">
+                                                                    <Setter Property="Text" Value="Status: Deactivated"/>
+                                                                    <Setter Property="Foreground" Value="#D83C3E"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Button Content="Deactivate" Padding="8,4" Margin="0,0,4,0"
+                                                        Background="#F0A04B" Foreground="#202225" BorderThickness="0"
+                                                        Command="{Binding DataContext.DeactivateUserCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsDeactivated}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+                                                <Button Content="Reactivate" Padding="8,4" Margin="0,0,4,0"
+                                                        Background="#3BA55D" Foreground="White" BorderThickness="0"
+                                                        Command="{Binding DataContext.ReactivateUserCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsDeactivated}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+                                                <Button Content="Delete" Padding="8,4"
+                                                         Background="#D83C3E" Foreground="White" BorderThickness="0"
+                                                         Command="{Binding DataContext.DeleteUserCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                         CommandParameter="{Binding}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Border>
+
+                <StackPanel Orientation="Vertical" Margin="0,12,0,0">
+                    <TextBlock Text="Create New User" Foreground="#B9BBBE" FontSize="12"/>
+                    <TextBox Text="{Binding AdminNewUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,6,0,6" Background="#40444B" Foreground="White" />
+                    <TextBox Text="{Binding AdminNewPassword, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,6" Background="#40444B" Foreground="White" />
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <CheckBox IsChecked="{Binding AdminNewIsAdmin}" Foreground="#B9BBBE"/>
+                        <TextBlock Text="Is Admin" Foreground="#B9BBBE" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                    </StackPanel>
+                    <Button Content="Create User" Command="{Binding CreateUserCommand}" Padding="8,6" Margin="0,8,0,0" Background="#3BA55D" Foreground="White" BorderThickness="0"/>
+                </StackPanel>
+
                 <ScrollViewer Margin="0,12,0,0" Height="320">
                     <ItemsControl ItemsSource="{Binding InviteTokens}">
                         <ItemsControl.ItemTemplate>
@@ -314,13 +433,16 @@
                                         </StackPanel>
                                          <TextBlock Text="{Binding CreatedAt, StringFormat='{}Created: {0:yyyy-MM-dd HH:mm}'}" Foreground="#B9BBBE" FontSize="12" Margin="0,4,0,0"/>
                                          <TextBlock Text="{Binding ExpiresAt, StringFormat='{}Expires: {0:yyyy-MM-dd}', TargetNullValue='Expires: Never'}" Foreground="#B9BBBE" FontSize="12"/>
-                                         <TextBlock Text="{Binding MaxUses, StringFormat='{}Max Uses: {0}'}" Foreground="#B9BBBE" FontSize="12"/>
+                                         <TextBlock Text="{Binding MaxUses, StringFormat='{}Uses Remaining: {0}'}" Foreground="#B9BBBE" FontSize="12"/>
                                          <TextBlock Foreground="#B9BBBE" FontSize="12" Margin="0,4,0,0">
                                              <TextBlock.Style>
                                                  <Style TargetType="TextBlock">
                                                      <Setter Property="Text" Value="Status: Active"/>
                                                      <Style.Triggers>
                                                          <DataTrigger Binding="{Binding IsUsed}" Value="True">
+                                                             <Setter Property="Text" Value="Status: Used / Revoked"/>
+                                                         </DataTrigger>
+                                                         <DataTrigger Binding="{Binding MaxUses}" Value="0">
                                                              <Setter Property="Text" Value="Status: Used / Revoked"/>
                                                          </DataTrigger>
                                                      </Style.Triggers>
@@ -343,6 +465,9 @@
                                                         <DataTrigger Binding="{Binding IsUsed}" Value="True">
                                                             <Setter Property="Visibility" Value="Collapsed"/>
                                                         </DataTrigger>
+                                                        <DataTrigger Binding="{Binding MaxUses}" Value="0">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </Button.Style>
@@ -360,7 +485,7 @@
         <Border Grid.ColumnSpan="3" Grid.RowSpan="2"
                 HorizontalAlignment="Right" VerticalAlignment="Top"
                 Margin="0,120,32,0" Padding="12"
-                Background="#3BA55D" BorderBrush="#1E1F22" BorderThickness="1"
+                Background="#3BA55D" BorderBrush="#1F1F22" BorderThickness="1"
                 CornerRadius="6" Panel.ZIndex="40"
                 Visibility="{Binding CopyNotificationVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
             <Border.Style>

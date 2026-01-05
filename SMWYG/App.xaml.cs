@@ -36,13 +36,30 @@ namespace SMWYG
             // Register your ViewModels and Windows
             services.AddSingleton<MainViewModel>();
             services.AddSingleton<MainWindow>();
+            services.AddTransient<LoginWindow>();
 
             // Build and store the service provider
             Services = services.BuildServiceProvider();
 
-            // 3. Show the main window
-            var mainWindow = Services.GetRequiredService<MainWindow>();
-            mainWindow.Show();
+            // Show the login window first
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            var login = Services.GetRequiredService<LoginWindow>();
+            bool? result = login.ShowDialog();
+            if (result == true && login.SignedInUser != null)
+            {
+                // Sign in
+                var mainVm = Services.GetRequiredService<MainViewModel>();
+                mainVm.SignIn(login.SignedInUser);
+
+                var mainWindow = Services.GetRequiredService<MainWindow>();
+                MainWindow = mainWindow;
+                ShutdownMode = ShutdownMode.OnMainWindowClose;
+                mainWindow.Show();
+            }
+            else
+            {
+                Shutdown();
+            }
         }
     }
 }

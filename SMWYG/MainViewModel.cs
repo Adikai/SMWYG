@@ -6,7 +6,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
 using SMWYG.Dialogs;
 using SMWYG.Models;
+using SMWYG.Utils;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
@@ -37,6 +39,13 @@ namespace SMWYG
         {
             get => inviteTokens;
             set => SetProperty(ref inviteTokens, value);
+        }
+
+        private ObservableCollection<User> adminUsers = new();
+        public ObservableCollection<User> AdminUsers
+        {
+            get => adminUsers;
+            set => SetProperty(ref adminUsers, value);
         }
 
         // Selected items
@@ -113,8 +122,30 @@ namespace SMWYG
             set => SetProperty(ref userSettingsProfilePicturePath, value);
         }
 
-        // Current user (hardcoded for now – replace with real login later)
-        private readonly User currentUser = new User
+        // New user inputs
+        private string adminNewUsername = string.Empty;
+        public string AdminNewUsername
+        {
+            get => adminNewUsername;
+            set => SetProperty(ref adminNewUsername, value);
+        }
+
+        private string adminNewPassword = string.Empty;
+        public string AdminNewPassword
+        {
+            get => adminNewPassword;
+            set => SetProperty(ref adminNewPassword, value);
+        }
+
+        private bool adminNewIsAdmin = false;
+        public bool AdminNewIsAdmin
+        {
+            get => adminNewIsAdmin;
+            set => SetProperty(ref adminNewIsAdmin, value);
+        }
+
+        // Current user (placeholder until real auth)
+        private User currentUser = new User
         {
             Id = Guid.Parse("00000000-0000-0000-0000-000000000001"), // Placeholder
             Username = "Adhil",
@@ -129,36 +160,16 @@ namespace SMWYG
             _config = config;
             UserSettingsUsername = currentUser.Username;
             UserSettingsProfilePicturePath = currentUser.ProfilePicture;
-
-            // Load persisted user data (profile picture, username, isAdmin) from DB
-            _ = LoadCurrentUserAsync();
         }
 
-        private async Task LoadCurrentUserAsync()
+        // Called after a successful login to populate current user and update bindings
+        public void SignIn(User user)
         {
-            try
-            {
-                var userEntity = await _db.Users.FirstOrDefaultAsync(u => u.Id == currentUser.Id);
-                if (userEntity != null)
-                {
-                    // Ensure UI updates happen on UI thread
-                    Application.Current?.Dispatcher.Invoke(() =>
-                    {
-                        currentUser.Username = userEntity.Username;
-                        currentUser.ProfilePicture = userEntity.ProfilePicture;
-                        currentUser.IsAdmin = userEntity.IsAdmin;
-
-                        UserSettingsUsername = currentUser.Username;
-                        UserSettingsProfilePicturePath = currentUser.ProfilePicture;
-
-                        OnPropertyChanged(nameof(CurrentUser));
-                    });
-                }
-            }
-            catch
-            {
-                // ignore load errors for now
-            }
+            if (user == null) return;
+            currentUser = user;
+            UserSettingsUsername = currentUser.Username;
+            UserSettingsProfilePicturePath = currentUser.ProfilePicture;
+            OnPropertyChanged(nameof(CurrentUser));
         }
 
         // Load all servers the current user is a member of
@@ -231,7 +242,7 @@ namespace SMWYG
             var serverChannels = await _db.Channels
                 .Where(c => c.ServerId == serverId)
                 .OrderBy(c => c.Position)
-                .ThenBy(c => c.Name)
+                .ThenBy(c => c.CreatedAt)
                 .ToListAsync();
 
             Channels.Clear();
@@ -294,10 +305,16 @@ namespace SMWYG
         [RelayCommand]
         private async Task CreateServerAsync()
         {
-            // Simple prompt – replace with proper dialog later
-            string? name = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter server name:", "Create New Server", "My Awesome Server");
+            var dialog = new TextPromptDialog("Create Server", "Server name", "Create", "My Awesome Server")
+            {
+                Owner = Application.Current?.MainWindow
+            };
 
+            bool? dialogResult = dialog.ShowDialog();
+            if (dialogResult != true)
+                return;
+
+            string name = dialog.InputText;
             if (string.IsNullOrWhiteSpace(name))
                 return;
 
@@ -450,8 +467,16 @@ namespace SMWYG
                 return;
             }
 
-            string? newName = Microsoft.VisualBasic.Interaction.InputBox(
-                "Enter the new channel name:", "Rename Channel", SelectedChannel.Name);
+            var dialog = new TextPromptDialog("Rename Channel", "Channel name", "Save", SelectedChannel.Name)
+            {
+                Owner = Application.Current?.MainWindow
+            };
+
+            bool? dialogResult = dialog.ShowDialog();
+            if (dialogResult != true)
+                return;
+
+            string newName = dialog.InputText;
             if (string.IsNullOrWhiteSpace(newName))
                 return;
 
@@ -518,6 +543,7 @@ namespace SMWYG
             if (!IsInviteManagerOpen)
             {
                 await LoadInviteTokensAsync();
+                await LoadUsersAsync();
                 IsInviteManagerOpen = true;
             }
             else
@@ -586,7 +612,9 @@ namespace SMWYG
             }
 
             entity.IsUsed = true;
+            entity.MaxUses = 0;
             entity.ExpiresAt = DateTime.UtcNow;
+            entity.UsedBy = null;
             await _db.SaveChangesAsync();
 
             await LoadInviteTokensAsync();
@@ -646,35 +674,21 @@ namespace SMWYG
         }
 
         [RelayCommand]
-        private async Task DeleteServerAsync()
+        private async Task MoveChannelUpAsync(Channel? channel)
         {
-            if (SelectedServer == null)
-            {
-                MessageBox.Show("Select a server first.", "No Server", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-
-            var confirmation = MessageBox.Show(
-                $"Delete server '{SelectedServer.Name}'? All channels and messages will be removed.",
-                "Delete Server",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-
-            if (confirmation != MessageBoxResult.Yes)
+            if (channel == null)
                 return;
 
-            var serverEntity = await _db.Servers.FirstOrDefaultAsync(s => s.Id == SelectedServer.Id);
-            if (serverEntity == null)
-            {
-                MessageBox.Show("Server no longer exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                await LoadServersAsync();
+            await ReorderChannelAsync(channel, -1);
+        }
+
+        [RelayCommand]
+        private async Task MoveChannelDownAsync(Channel? channel)
+        {
+            if (channel == null)
                 return;
-            }
 
-            _db.Servers.Remove(serverEntity);
-            await _db.SaveChangesAsync();
-
-            await LoadServersAsync();
+            await ReorderChannelAsync(channel, 1);
         }
 
         [RelayCommand]
@@ -705,6 +719,7 @@ namespace SMWYG
 
             _db.Channels.Remove(channelEntity);
             await _db.SaveChangesAsync();
+            await NormalizeChannelPositionsAsync(SelectedServer.Id);
 
             await LoadChannelsAsync(SelectedServer.Id);
         }
@@ -882,8 +897,21 @@ namespace SMWYG
             OnPropertyChanged(nameof(CurrentUser));
         }
 
+        private bool PromptForLogin()
+        {
+            var login = App.Services.GetRequiredService<LoginWindow>();
+            bool? result = login.ShowDialog();
+            if (result == true && login.SignedInUser != null)
+            {
+                SignIn(login.SignedInUser);
+                return true;
+            }
+
+            return false;
+        }
+
         [RelayCommand]
-        private Task LogoutAsync()
+        private async Task LogoutAsync()
         {
             Servers.Clear();
             Channels.Clear();
@@ -894,8 +922,21 @@ namespace SMWYG
             MessageInput = string.Empty;
             IsUserSettingsOpen = false;
             IsInviteManagerOpen = false;
-            MessageBox.Show("Logged out (placeholder until auth flow is built).", "Logout", MessageBoxButton.OK, MessageBoxImage.Information);
-            return Task.CompletedTask;
+            Application.Current?.MainWindow?.Hide();
+
+            bool loggedIn = PromptForLogin();
+            if (loggedIn)
+            {
+                Application.Current?.MainWindow?.Show();
+                CopyNotificationText = string.Empty;
+                CopyNotificationIsError = false;
+                CopyNotificationVisible = false;
+                MessageBox.Show("Logged out and re-signed in.", "Logout", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                Application.Current?.Shutdown();
+            }
         }
 
         private bool copyNotificationVisible;
@@ -919,6 +960,15 @@ namespace SMWYG
             set => SetProperty(ref copyNotificationIsError, value);
         }
 
+        private async Task ShowNotification(string text, bool isError)
+        {
+            CopyNotificationText = text;
+            CopyNotificationIsError = isError;
+            CopyNotificationVisible = true;
+            await Task.Delay(1800);
+            CopyNotificationVisible = false;
+        }
+
         [RelayCommand]
         private async void CopyInviteToken(string? token)
         {
@@ -940,6 +990,267 @@ namespace SMWYG
             CopyNotificationVisible = true;
             await Task.Delay(1800);
             CopyNotificationVisible = false;
+        }
+
+        [RelayCommand]
+        private async Task LoadUsersAsync()
+        {
+            var users = await _db.Users
+                .AsNoTracking()
+                .OrderBy(u => u.Username)
+                .ToListAsync();
+
+            AdminUsers.Clear();
+            foreach (var u in users)
+            {
+                AdminUsers.Add(u);
+            }
+        }
+
+        [RelayCommand]
+        private async Task CreateUserAsync()
+        {
+            if (string.IsNullOrWhiteSpace(AdminNewUsername))
+            {
+                await ShowNotification("Username cannot be empty.", true);
+                return;
+            }
+
+            bool exists = await _db.Users.AnyAsync(u => u.Username.ToLower() == AdminNewUsername.Trim().ToLower());
+            if (exists)
+            {
+                await ShowNotification("Username already exists.", true);
+                return;
+            }
+
+            var user = new User
+            {
+                Id = Guid.NewGuid(),
+                Username = AdminNewUsername.Trim(),
+                PasswordHash = PasswordHelper.HashPassword(AdminNewPassword ?? string.Empty),
+                ProfilePicture = null,
+                CreatedAt = DateTime.UtcNow,
+                IsAdmin = AdminNewIsAdmin
+            };
+
+            try
+            {
+                _db.Users.Add(user);
+                await _db.SaveChangesAsync();
+                _db.ChangeTracker.Clear();
+            }
+            catch (Exception)
+            {
+                await ShowNotification("Failed to create user.", true);
+                return;
+            }
+
+            AdminNewUsername = string.Empty;
+            AdminNewPassword = string.Empty;
+            AdminNewIsAdmin = false;
+
+            await LoadUsersAsync();
+            await ShowNotification("User created.", false);
+        }
+
+        [RelayCommand]
+        private async Task DeactivateUserAsync(User? user)
+        {
+            if (!CanManageUser(user))
+                return;
+
+            var entity = await _db.Users.FirstOrDefaultAsync(u => u.Id == user!.Id);
+            if (entity == null)
+            {
+                await ShowNotification("User not found.", true);
+                return;
+            }
+
+            if (string.IsNullOrEmpty(entity.PasswordHash))
+            {
+                await ShowNotification("User already deactivated.", true);
+                return;
+            }
+
+            var memberships = await _db.ServerMembers.Where(sm => sm.UserId == entity.Id).ToListAsync();
+            if (memberships.Count > 0)
+            {
+                _db.ServerMembers.RemoveRange(memberships);
+            }
+
+            var streams = await _db.ActiveStreams.Where(a => a.StreamerId == entity.Id).ToListAsync();
+            if (streams.Count > 0)
+            {
+                _db.ActiveStreams.RemoveRange(streams);
+            }
+
+            entity.PasswordHash = string.Empty;
+
+            await _db.SaveChangesAsync();
+            await LoadUsersAsync();
+            await ShowNotification($"{entity.Username} deactivated.", false);
+        }
+
+        [RelayCommand]
+        private async Task ReactivateUserAsync(User? user)
+        {
+            if (!CanManageUser(user))
+                return;
+
+            var entity = await _db.Users.FirstOrDefaultAsync(u => u.Id == user!.Id);
+            if (entity == null)
+            {
+                await ShowNotification("User not found.", true);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(entity.PasswordHash))
+            {
+                await ShowNotification("User is already active.", true);
+                return;
+            }
+
+            string tempPassword = GenerateSecureInviteToken(12);
+            entity.PasswordHash = PasswordHelper.HashPassword(tempPassword);
+
+            await _db.SaveChangesAsync();
+            await LoadUsersAsync();
+
+            MessageBox.Show($"User '{entity.Username}' reactivated.\nTemporary password: {tempPassword}",
+                "User Reactivated",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+
+        [RelayCommand]
+        private async Task DeleteUserAsync(User? user)
+        {
+            if (!CanManageUser(user))
+                return;
+
+            var confirmation = MessageBox.Show(
+                $"Delete user '{user!.Username}'? All servers they own, memberships, and messages will be removed.",
+                "Delete User",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (confirmation != MessageBoxResult.Yes)
+                return;
+
+            var entity = await _db.Users.FirstOrDefaultAsync(u => u.Id == user.Id);
+            if (entity == null)
+            {
+                await ShowNotification("User not found.", true);
+                return;
+            }
+
+            var ownedServers = await _db.Servers.Where(s => s.OwnerId == entity.Id).ToListAsync();
+            if (ownedServers.Count > 0)
+            {
+                _db.Servers.RemoveRange(ownedServers);
+            }
+
+            var memberships = await _db.ServerMembers.Where(sm => sm.UserId == entity.Id).ToListAsync();
+            if (memberships.Count > 0)
+            {
+                _db.ServerMembers.RemoveRange(memberships);
+            }
+
+            var messages = await _db.Messages.Where(m => m.AuthorId == entity.Id).ToListAsync();
+            if (messages.Count > 0)
+            {
+                _db.Messages.RemoveRange(messages);
+            }
+
+            var streams = await _db.ActiveStreams.Where(a => a.StreamerId == entity.Id).ToListAsync();
+            if (streams.Count > 0)
+            {
+                _db.ActiveStreams.RemoveRange(streams);
+            }
+
+            var tokensCreated = await _db.InviteTokens.Where(t => t.CreatedBy == entity.Id).ToListAsync();
+            foreach (var token in tokensCreated)
+            {
+                token.CreatedBy = currentUser.Id;
+            }
+
+            var tokensUsed = await _db.InviteTokens.Where(t => t.UsedBy == entity.Id).ToListAsync();
+            foreach (var token in tokensUsed)
+            {
+                token.UsedBy = null;
+            }
+
+            _db.Users.Remove(entity);
+            await _db.SaveChangesAsync();
+
+            await LoadUsersAsync();
+            await ShowNotification("User deleted.", false);
+        }
+
+        private async Task ReorderChannelAsync(Channel channel, int direction)
+        {
+            if (SelectedServer == null)
+                return;
+
+            var orderedChannels = await _db.Channels
+                .Where(c => c.ServerId == SelectedServer.Id)
+                .OrderBy(c => c.Position)
+                .ThenBy(c => c.CreatedAt)
+                .ToListAsync();
+
+            int currentIndex = orderedChannels.FindIndex(c => c.Id == channel.Id);
+            if (currentIndex < 0)
+                return;
+
+            int targetIndex = currentIndex + direction;
+            if (targetIndex < 0 || targetIndex >= orderedChannels.Count)
+                return;
+
+            (orderedChannels[currentIndex], orderedChannels[targetIndex]) = (orderedChannels[targetIndex], orderedChannels[currentIndex]);
+            NormalizeChannelPositions(orderedChannels);
+            await _db.SaveChangesAsync();
+
+            await LoadChannelsAsync(SelectedServer.Id, channel.Id);
+        }
+
+        private async Task NormalizeChannelPositionsAsync(Guid serverId)
+        {
+            var orderedChannels = await _db.Channels
+                .Where(c => c.ServerId == serverId)
+                .OrderBy(c => c.Position)
+                .ThenBy(c => c.CreatedAt)
+                .ToListAsync();
+
+            NormalizeChannelPositions(orderedChannels);
+            await _db.SaveChangesAsync();
+        }
+
+        private static void NormalizeChannelPositions(List<Channel> channels)
+        {
+            for (int i = 0; i < channels.Count; i++)
+            {
+                channels[i].Position = i;
+            }
+        }
+
+        private bool CanManageUser(User? user)
+        {
+            if (!currentUser.IsAdmin)
+            {
+                MessageBox.Show("Admin access required.", "Restricted", MessageBoxButton.OK, MessageBoxImage.Information);
+                return false;
+            }
+
+            if (user == null)
+                return false;
+
+            if (user.Id == currentUser.Id)
+            {
+                MessageBox.Show("You cannot modify your own account from this panel.", "Validation", MessageBoxButton.OK, MessageBoxImage.Information);
+                return false;
+            }
+
+            return true;
         }
     }
 }

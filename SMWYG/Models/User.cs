@@ -27,5 +27,8 @@ namespace SMWYG.Models
         public ICollection<Server> OwnedServers { get; set; } = new List<Server>();
         public ICollection<ServerMember> ServerMemberships { get; set; } = new List<ServerMember>();
         public ICollection<Message> Messages { get; set; } = new List<Message>();
+
+        [NotMapped]
+        public bool IsDeactivated => string.IsNullOrEmpty(PasswordHash);
     }
 }
