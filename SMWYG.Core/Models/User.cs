@@ -1,8 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;
-using System.Text;
-using System.Windows;
 
 namespace SMWYG.Models
 {
@@ -24,9 +22,9 @@ namespace SMWYG.Models
         public bool IsAdmin { get; set; }
 
         // Navigation
-        public ICollection<Server> OwnedServers { get; set; } = new List<Server>();
-        public ICollection<ServerMember> ServerMemberships { get; set; } = new List<ServerMember>();
-        public ICollection<Message> Messages { get; set; } = new List<Message>();
+        public ICollection<Server>? OwnedServers { get; set; }
+        public ICollection<ServerMember>? ServerMemberships { get; set; }
+        public ICollection<Message>? Messages { get; set; }
 
         [NotMapped]
         public bool IsDeactivated => string.IsNullOrEmpty(PasswordHash);

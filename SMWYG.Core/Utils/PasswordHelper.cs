@@ -33,7 +33,6 @@ namespace SMWYG.Utils
             var parts = storedHash.Split(':');
             if (parts.Length != 2)
             {
-                // Fallback for legacy plaintext storage
                 return string.Equals(storedHash, candidate, StringComparison.Ordinal);
             }
 

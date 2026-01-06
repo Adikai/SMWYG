@@ -1,0 +1,6 @@
+@SMWYG.Api_HostAddress = http://localhost:5110
+
+GET {{SMWYG.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

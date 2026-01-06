@@ -24,8 +24,9 @@ The project follows the phased plan defined in `Project-guide.md`. Each phase su
 - [x] Channel list shows dedicated text/voice icons plus additional spacing for readability.
 - [x] Persist channel `position` ordering when users reorder channels (optional stretch).
 - [x] Replaced the remaining `Interaction.InputBox` prompts with themed dialogs for server creation and channel renaming.
+- [x] Users can join existing servers via invite code, and a system message is dropped into every text channel announcing the new member.
 
-> Latest update: Added a compact server settings drawer (invite code + rename/icon/delete), simplified the channel actions bar (dialog-driven add + quick remove), introduced a user settings panel for updating username/profile picture with a placeholder logout flow, refreshed the channel list visuals (spacing + icons), stood up the Super Admin invite-token manager overlay, finished channel reordering with persisted positions plus invite-token-backed registration and admin delete/deactivate flows, and aligned server/channel prompts with the new dialog style.
+> Latest update: Added a compact server settings drawer (invite code + rename/icon/delete), simplified the channel actions bar (dialog-driven add + quick remove), introduced a user settings panel for updating username/profile picture with a placeholder logout flow, refreshed the channel list visuals (spacing + icons), stood up the Super Admin invite-token manager overlay, finished channel reordering with persisted positions plus invite-token-backed registration and admin delete/deactivate flows, aligned server/channel prompts with the new dialog style, enabled invite-code joins with automated system announcements, implemented live text-channel polling so new messages appear without manual reloads, and moved every WPF data interaction onto the ASP.NET Core API (no more direct DbContext usage or JWT auth—invite tokens remain the only gate).
 
 ### Phase 2 – User Management Panel (next)
 - [x] Build Super Admin panel for invite token lifecycle (generate, view, revoke).
@@ -33,11 +34,17 @@ The project follows the phased plan defined in `Project-guide.md`. Each phase su
 - [x] Foundation: client-side user settings flyout lets the signed-in user rename themselves and update avatars (persists to `users`).
 - [x] Allow super admins to delete/deactivate users and cascade membership cleanup.
 
+### Phase 3 – Messaging System
+- [x] Text channels now auto-refresh every few seconds via background polling so new messages appear instantly for all clients sharing the database.
+- [ ] Replace the polling stop-gap with a SignalR hub once the ASP.NET Core backend is online.
+- [ ] Support image/GIF uploads, store the payloads locally, and surface thumbnails inside the chat timeline.
+- [ ] Implement a cleanup routine that purges text-channel history after 30 days.
+
 ## Next Actions
 1. Confirm how/where server icons should be stored in production (local folder vs. CDN/blob) and adjust the current `ServerIcons/`/`ProfilePictures/` copy logic accordingly.
-2. Implement the documented invite-token redemption/deactivation endpoints on the ASP.NET Core backend and surface their responses to the WPF client.
-3. Expand auth planning beyond invite tokens (password reset, enforced password change on first login, audit retention policy).
-4. Add automated tests around channel/server mutations once the backend API surface replaces the current direct `AppDbContext` usage.
+2. Stand up the ASP.NET Core messaging API plus SignalR hub so clients can switch from polling to push-based updates.
+3. Add the media-upload pipeline (images/GIFs) with server-side storage plus client rendering inside the message list.
+4. Implement the 30-day retention job and integration tests that cover chat CRUD operations through the API surface.
 
 ## Backend/API Workflow – Invite Tokens & Deactivation Auditing
 

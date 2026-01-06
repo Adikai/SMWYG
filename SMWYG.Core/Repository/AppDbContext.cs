@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using SMWYG.Models;
 
 namespace SMWYG
@@ -13,11 +13,12 @@ namespace SMWYG
         public DbSet<InviteToken> InviteTokens { get; set; } = null!;
         public DbSet<ActiveStream> ActiveStreams { get; set; } = null!;
 
-        public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+        public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
+        {
+        }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            // Map table names
             modelBuilder.Entity<User>().ToTable("users");
             modelBuilder.Entity<Server>().ToTable("servers");
             modelBuilder.Entity<ServerMember>().ToTable("server_members");
@@ -32,11 +33,9 @@ namespace SMWYG
                 .HasForeignKey(s => s.OwnerId)
                 .HasPrincipalKey(u => u.Id);
 
-            // Composite primary key
             modelBuilder.Entity<ServerMember>()
                 .HasKey(sm => new { sm.ServerId, sm.UserId });
 
-            // === FIX: Explicitly map foreign key column names ===
             modelBuilder.Entity<ServerMember>()
                 .Property(sm => sm.ServerId)
                 .HasColumnName("server_id");
@@ -45,7 +44,6 @@ namespace SMWYG
                 .Property(sm => sm.UserId)
                 .HasColumnName("user_id");
 
-            // Now configure relationships properly
             modelBuilder.Entity<ServerMember>()
                 .HasOne(sm => sm.Server)
                 .WithMany(s => s.Members)
@@ -58,12 +56,9 @@ namespace SMWYG
                 .HasForeignKey(sm => sm.UserId)
                 .HasPrincipalKey(u => u.Id);
 
-            // Unique channel name per server
             modelBuilder.Entity<Channel>()
                 .HasIndex(c => new { c.ServerId, c.Name })
                 .IsUnique();
-
-            base.OnModelCreating(modelBuilder);
         }
     }
 }

@@ -204,7 +204,7 @@
             </Grid.RowDefinitions>
 
             <!-- Messages Area -->
-            <ScrollViewer VerticalScrollBarVisibility="Auto" Grid.Row="0">
+            <ScrollViewer x:Name="MessagesScrollViewer" VerticalScrollBarVisibility="Auto" Grid.Row="0">
                 <ItemsControl ItemsSource="{Binding Messages}" Margin="16">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
@@ -228,7 +228,7 @@
             </ScrollViewer>
 
             <!-- Message Input -->
-            <TextBox Grid.Row="0" VerticalAlignment="Bottom"
+            <TextBox Grid.Row="1" VerticalAlignment="Bottom"
                      Margin="16,0,16,16" Padding="12" FontSize="14"
                      Background="#40444B" Foreground="White"
                      BorderBrush="#292B2F" BorderThickness="1"

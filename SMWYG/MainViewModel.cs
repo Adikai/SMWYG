@@ -1,11 +1,11 @@
 ﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
 using SMWYG.Dialogs;
 using SMWYG.Models;
+using SMWYG.Services;
 using SMWYG.Utils;
 using System;
 using System.Collections.Generic;
@@ -15,14 +15,20 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
 
 namespace SMWYG
 {
     public partial class MainViewModel : ObservableObject
     {
-        private readonly AppDbContext _db;
+        private readonly IApiService _api;
         private readonly IConfiguration _config;
         private Guid? _pendingChannelSelection;
+
+        private readonly DispatcherTimer messageRefreshTimer;
+        private bool isMessageRefreshTickRunning;
+        private Guid? activeMessageRefreshChannelId;
+        private DateTime latestMessageTimestampUtc = DateTime.MinValue;
 
         // Collections
         [ObservableProperty]
@@ -154,12 +160,18 @@ namespace SMWYG
 
         public User CurrentUser => currentUser;
 
-        public MainViewModel(AppDbContext db, IConfiguration config)
+        public MainViewModel(IApiService api, IConfiguration config)
         {
-            _db = db;
+            _api = api;
             _config = config;
             UserSettingsUsername = currentUser.Username;
             UserSettingsProfilePicturePath = currentUser.ProfilePicture;
+
+            messageRefreshTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(2)
+            };
+            messageRefreshTimer.Tick += MessageRefreshTimer_Tick;
         }
 
         // Called after a successful login to populate current user and update bindings
@@ -183,10 +195,7 @@ namespace SMWYG
 
         private async Task PopulateServersAsync(Guid? serverIdToSelect)
         {
-            var userServers = await _db.Servers
-                .Where(s => _db.ServerMembers.Any(sm => sm.ServerId == s.Id && sm.UserId == currentUser.Id))
-                .OrderBy(s => s.Name)
-                .ToListAsync();
+            var userServers = await _api.GetUserServersAsync(currentUser.Id);
 
             Servers.Clear();
             foreach (var server in userServers)
@@ -233,17 +242,14 @@ namespace SMWYG
                 ServerSettingsInviteCode = string.Empty;
                 Channels.Clear();
                 SelectedChannel = null;
+                StopMessageRefresh();
                 Messages.Clear();
             }
         }
 
         private async Task LoadChannelsAsync(Guid serverId, Guid? channelToSelect = null)
         {
-            var serverChannels = await _db.Channels
-                .Where(c => c.ServerId == serverId)
-                .OrderBy(c => c.Position)
-                .ThenBy(c => c.CreatedAt)
-                .ToListAsync();
+            var serverChannels = await _api.GetChannelsAsync(serverId);
 
             Channels.Clear();
             foreach (var channel in serverChannels)
@@ -266,6 +272,7 @@ namespace SMWYG
 
             if (nextChannel == null)
             {
+                StopMessageRefresh();
                 Messages.Clear();
             }
         }
@@ -275,22 +282,23 @@ namespace SMWYG
         {
             if (value != null && value.Type == "text")
             {
-                _ = LoadMessagesAsync(value.Id);
+                _ = LoadMessagesAsync(value.Id, true);
             }
             else
             {
+                StopMessageRefresh();
                 Messages.Clear();
             }
         }
 
-        private async Task LoadMessagesAsync(Guid channelId)
+        private async Task LoadMessagesAsync(Guid channelId, bool resetPollingState = false)
         {
-            var channelMessages = await _db.Messages
-                .Where(m => m.ChannelId == channelId && m.DeletedAt == null)
-                .Include(m => m.Author)
-                .OrderBy(m => m.SentAt)
-                .Take(100) // Limit for performance – implement pagination later
-                .ToListAsync();
+            if (resetPollingState)
+            {
+                latestMessageTimestampUtc = DateTime.MinValue;
+            }
+
+            var channelMessages = await _api.GetMessagesAsync(channelId);
 
             Messages.Clear();
             foreach (var msg in channelMessages)
@@ -298,6 +306,12 @@ namespace SMWYG
                 Messages.Add(msg);
             }
 
+            if (channelMessages.Count > 0)
+            {
+                latestMessageTimestampUtc = channelMessages[^1].SentAt;
+            }
+
+            StartMessageRefresh(channelId);
             // Scroll to bottom (you can trigger this via event or behavior later)
         }
 
@@ -318,48 +332,7 @@ namespace SMWYG
             if (string.IsNullOrWhiteSpace(name))
                 return;
 
-            var newServer = new Server
-            {
-                Id = Guid.NewGuid(),
-                Name = name.Trim(),
-                OwnerId = currentUser.Id,
-                CreatedAt = DateTime.UtcNow
-            };
-
-            _db.Servers.Add(newServer);
-
-            // Add current user as owner/member
-            _db.ServerMembers.Add(new ServerMember
-            {
-                ServerId = newServer.Id,
-                UserId = currentUser.Id,
-                Role = "owner",
-                JoinedAt = DateTime.UtcNow
-            });
-
-            // Create default channels
-            _db.Channels.Add(new Channel
-            {
-                Id = Guid.NewGuid(),
-                ServerId = newServer.Id,
-                Name = "general",
-                Type = "text",
-                Position = 0,
-                CreatedAt = DateTime.UtcNow
-            });
-
-            _db.Channels.Add(new Channel
-            {
-                Id = Guid.NewGuid(),
-                ServerId = newServer.Id,
-                Name = "General",
-                Type = "voice", // Group streaming channel
-                Position = 1,
-                CreatedAt = DateTime.UtcNow
-            });
-
-            await _db.SaveChangesAsync();
-
+            var newServer = await _api.CreateServerAsync(name.Trim(), currentUser.Id);
             await ReloadServersPreservingSelectionAsync(newServer.Id);
         }
 
@@ -382,28 +355,30 @@ namespace SMWYG
             if (result != true)
                 return;
 
-            var serverEntity = await _db.Servers.FirstOrDefaultAsync(s => s.Id == SelectedServer.Id);
-            if (serverEntity == null)
+            var serverEntity = await _api.GetUserServersAsync(currentUser.Id);
+            // Note: API update icon flow expects server update endpoint; this is simplified.
+            string iconsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ServerIcons");
+            Directory.CreateDirectory(iconsDirectory);
+
+            string extension = Path.GetExtension(dialog.FileName);
+            // choose the selected server entity from returned list
+            var server = serverEntity.FirstOrDefault(s => s.Id == SelectedServer.Id);
+            if (server == null)
             {
                 MessageBox.Show("Server no longer exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
                 await LoadServersAsync();
                 return;
             }
 
-            string iconsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ServerIcons");
-            Directory.CreateDirectory(iconsDirectory);
-
-            string extension = Path.GetExtension(dialog.FileName);
-            string fileName = $"{serverEntity.Id}{extension}";
+            string fileName = $"{server.Id}{extension}";
             string destinationPath = Path.Combine(iconsDirectory, fileName);
             File.Copy(dialog.FileName, destinationPath, true);
 
             string relativePath = Path.Combine("ServerIcons", fileName).Replace("\\", "/");
-            serverEntity.Icon = relativePath;
-            await _db.SaveChangesAsync();
+            await _api.UpdateServerIconAsync(server.Id, relativePath);
 
             _pendingChannelSelection = SelectedChannel?.Id;
-            await ReloadServersPreservingSelectionAsync(serverEntity.Id);
+            await ReloadServersPreservingSelectionAsync(server.Id);
         }
 
         [RelayCommand]
@@ -430,32 +405,16 @@ namespace SMWYG
 
             string channelType = dialog.ChannelType;
 
-            bool nameExists = await _db.Channels.AnyAsync(c => c.ServerId == SelectedServer.Id && c.Name.ToLower() == channelName.ToLower());
+            var channels = await _api.GetChannelsAsync(SelectedServer.Id);
+            bool nameExists = channels.Any(c => c.Name.Equals(channelName, StringComparison.OrdinalIgnoreCase));
             if (nameExists)
             {
                 MessageBox.Show("Channel name already exists for this server.", "Duplicate Name", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
-            int nextPosition = (await _db.Channels
-                .Where(c => c.ServerId == SelectedServer.Id)
-                .Select(c => (int?)c.Position)
-                .MaxAsync()) ?? -1;
-
-            var newChannel = new Channel
-            {
-                Id = Guid.NewGuid(),
-                ServerId = SelectedServer.Id,
-                Name = channelName,
-                Type = channelType,
-                Position = nextPosition + 1,
-                CreatedAt = DateTime.UtcNow
-            };
-
-            _db.Channels.Add(newChannel);
-            await _db.SaveChangesAsync();
-
-            await LoadChannelsAsync(SelectedServer.Id, newChannel.Id);
+            var created = await _api.CreateChannelAsync(SelectedServer.Id, channelName, channelType, null, channels.Count);
+            await LoadChannelsAsync(SelectedServer.Id, created.Id);
         }
 
         [RelayCommand]
@@ -484,17 +443,15 @@ namespace SMWYG
             if (newName.Equals(SelectedChannel.Name, StringComparison.Ordinal))
                 return;
 
-            bool duplicate = await _db.Channels.AnyAsync(c =>
-                c.ServerId == SelectedServer.Id &&
-                c.Id != SelectedChannel.Id &&
-                c.Name.ToLower() == newName.ToLower());
+            var channels = await _api.GetChannelsAsync(SelectedServer.Id);
+            bool duplicate = channels.Any(c => c.Id != SelectedChannel.Id && c.Name.Equals(newName, StringComparison.OrdinalIgnoreCase));
             if (duplicate)
             {
                 MessageBox.Show("Channel name already exists for this server.", "Duplicate Name", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
-            var channelEntity = await _db.Channels.FirstOrDefaultAsync(c => c.Id == SelectedChannel.Id);
+            var channelEntity = (await _api.GetChannelsAsync(SelectedServer.Id)).FirstOrDefault(c => c.Id == SelectedChannel.Id);
             if (channelEntity == null)
             {
                 MessageBox.Show("Channel no longer exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -502,8 +459,7 @@ namespace SMWYG
                 return;
             }
 
-            channelEntity.Name = newName;
-            await _db.SaveChangesAsync();
+            await _api.RenameChannelAsync(channelEntity.Id, newName);
 
             await LoadChannelsAsync(SelectedServer.Id, channelEntity.Id);
         }
@@ -524,10 +480,12 @@ namespace SMWYG
                 SentAt = DateTime.UtcNow
             };
 
-            _db.Messages.Add(newMessage);
-            await _db.SaveChangesAsync();
-
-            Messages.Add(newMessage);
+            var created = await _api.SendMessageAsync(newMessage);
+            Messages.Add(created);
+            if (created.SentAt > latestMessageTimestampUtc)
+            {
+                latestMessageTimestampUtc = created.SentAt;
+            }
             MessageInput = string.Empty;
         }
 
@@ -576,8 +534,7 @@ namespace SMWYG
                 IsUsed = false
             };
 
-            _db.InviteTokens.Add(token);
-            await _db.SaveChangesAsync();
+            await _api.CreateInviteTokenAsync(token);
 
             InviteMaxUsesInput = maxUses.ToString();
             InviteExpiryDaysInput = expiryDays > 0 ? expiryDays.ToString() : "0";
@@ -597,36 +554,13 @@ namespace SMWYG
                 return;
             }
 
-            var entity = await _db.InviteTokens.FirstOrDefaultAsync(t => t.Id == token.Id);
-            if (entity == null)
-            {
-                MessageBox.Show("Invite token not found.", "Missing", MessageBoxButton.OK, MessageBoxImage.Warning);
-                await LoadInviteTokensAsync();
-                return;
-            }
-
-            if (entity.IsUsed)
-            {
-                MessageBox.Show("Invite token is already used or revoked.", "Info", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-
-            entity.IsUsed = true;
-            entity.MaxUses = 0;
-            entity.ExpiresAt = DateTime.UtcNow;
-            entity.UsedBy = null;
-            await _db.SaveChangesAsync();
-
+            await _api.RevokeInviteTokenAsync(token.Id);
             await LoadInviteTokensAsync();
         }
 
         private async Task LoadInviteTokensAsync()
         {
-            var items = await _db.InviteTokens
-                .OrderByDescending(t => t.CreatedAt)
-                .Take(100)
-                .ToListAsync();
-
+            var items = await _api.GetInviteTokensAsync();
             InviteTokens.Clear();
             foreach (var token in items)
             {
@@ -709,7 +643,7 @@ namespace SMWYG
             if (confirmation != MessageBoxResult.Yes)
                 return;
 
-            var channelEntity = await _db.Channels.FirstOrDefaultAsync(c => c.Id == SelectedChannel.Id);
+            var channelEntity = await _api.GetChannelsAsync(SelectedServer.Id);
             if (channelEntity == null)
             {
                 MessageBox.Show("Channel no longer exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -717,8 +651,7 @@ namespace SMWYG
                 return;
             }
 
-            _db.Channels.Remove(channelEntity);
-            await _db.SaveChangesAsync();
+            await _api.DeleteChannelAsync(SelectedChannel.Id);
             await NormalizeChannelPositionsAsync(SelectedServer.Id);
 
             await LoadChannelsAsync(SelectedServer.Id);
@@ -787,19 +720,20 @@ namespace SMWYG
                 return;
             }
 
-            var serverEntity = await _db.Servers.FirstOrDefaultAsync(s => s.Id == SelectedServer.Id);
-            if (serverEntity == null)
+            var serverEntity = await _api.GetUserServersAsync(currentUser.Id);
+            var server = serverEntity.FirstOrDefault(s => s.Id == SelectedServer.Id);
+            if (server == null)
             {
                 MessageBox.Show("Server no longer exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
                 await LoadServersAsync();
                 return;
             }
 
-            serverEntity.Name = trimmedName;
-            await _db.SaveChangesAsync();
+            server.Name = trimmedName;
+            await _api.UpdateServerAsync(server);
 
             _pendingChannelSelection = SelectedChannel?.Id;
-            await ReloadServersPreservingSelectionAsync(serverEntity.Id);
+            await ReloadServersPreservingSelectionAsync(server.Id);
             IsServerSettingsOpen = false;
         }
 
@@ -837,14 +771,14 @@ namespace SMWYG
                 return;
             }
 
-            var userEntity = await _db.Users.FirstOrDefaultAsync(u => u.Id == currentUser.Id);
+            var userEntity = await _api.GetUserByIdAsync(currentUser.Id);
             if (userEntity == null)
             {
                 MessageBox.Show("User not found.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
-            bool duplicate = await _db.Users.AnyAsync(u => u.Id != currentUser.Id && u.Username.ToLower() == trimmed.ToLower());
+            bool duplicate = await _api.UserExistsAsync(trimmed, currentUser.Id);
             if (duplicate)
             {
                 MessageBox.Show("Username already exists.", "Conflict", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -853,7 +787,7 @@ namespace SMWYG
 
             userEntity.Username = trimmed;
             currentUser.Username = trimmed;
-            await _db.SaveChangesAsync();
+            await _api.UpdateUserAsync(userEntity);
 
             UserSettingsUsername = trimmed;
             OnPropertyChanged(nameof(CurrentUser));
@@ -873,7 +807,7 @@ namespace SMWYG
             if (result != true)
                 return;
 
-            var userEntity = await _db.Users.FirstOrDefaultAsync(u => u.Id == currentUser.Id);
+            var userEntity = await _api.GetUserByIdAsync(currentUser.Id);
             if (userEntity == null)
             {
                 MessageBox.Show("User not found.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -891,7 +825,7 @@ namespace SMWYG
             string relativePath = Path.Combine("ProfilePictures", fileName).Replace("\\", "/");
             userEntity.ProfilePicture = relativePath;
             currentUser.ProfilePicture = relativePath;
-            await _db.SaveChangesAsync();
+            await _api.UpdateUserAsync(userEntity);
 
             UserSettingsProfilePicturePath = relativePath;
             OnPropertyChanged(nameof(CurrentUser));
@@ -995,11 +929,7 @@ namespace SMWYG
         [RelayCommand]
         private async Task LoadUsersAsync()
         {
-            var users = await _db.Users
-                .AsNoTracking()
-                .OrderBy(u => u.Username)
-                .ToListAsync();
-
+            var users = await _api.GetAllUsersAsync();
             AdminUsers.Clear();
             foreach (var u in users)
             {
@@ -1016,28 +946,17 @@ namespace SMWYG
                 return;
             }
 
-            bool exists = await _db.Users.AnyAsync(u => u.Username.ToLower() == AdminNewUsername.Trim().ToLower());
+            var users = await _api.GetAllUsersAsync();
+            bool exists = users.Any(u => u.Username.Equals(AdminNewUsername.Trim(), StringComparison.OrdinalIgnoreCase));
             if (exists)
             {
                 await ShowNotification("Username already exists.", true);
                 return;
             }
 
-            var user = new User
-            {
-                Id = Guid.NewGuid(),
-                Username = AdminNewUsername.Trim(),
-                PasswordHash = PasswordHelper.HashPassword(AdminNewPassword ?? string.Empty),
-                ProfilePicture = null,
-                CreatedAt = DateTime.UtcNow,
-                IsAdmin = AdminNewIsAdmin
-            };
-
             try
             {
-                _db.Users.Add(user);
-                await _db.SaveChangesAsync();
-                _db.ChangeTracker.Clear();
+                var created = await _api.CreateUserAsync(AdminNewUsername.Trim(), AdminNewPassword ?? string.Empty, AdminNewIsAdmin);
             }
             catch (Exception)
             {
@@ -1059,36 +978,9 @@ namespace SMWYG
             if (!CanManageUser(user))
                 return;
 
-            var entity = await _db.Users.FirstOrDefaultAsync(u => u.Id == user!.Id);
-            if (entity == null)
-            {
-                await ShowNotification("User not found.", true);
-                return;
-            }
-
-            if (string.IsNullOrEmpty(entity.PasswordHash))
-            {
-                await ShowNotification("User already deactivated.", true);
-                return;
-            }
-
-            var memberships = await _db.ServerMembers.Where(sm => sm.UserId == entity.Id).ToListAsync();
-            if (memberships.Count > 0)
-            {
-                _db.ServerMembers.RemoveRange(memberships);
-            }
-
-            var streams = await _db.ActiveStreams.Where(a => a.StreamerId == entity.Id).ToListAsync();
-            if (streams.Count > 0)
-            {
-                _db.ActiveStreams.RemoveRange(streams);
-            }
-
-            entity.PasswordHash = string.Empty;
-
-            await _db.SaveChangesAsync();
+            await _api.DeactivateUserAsync(user!.Id);
             await LoadUsersAsync();
-            await ShowNotification($"{entity.Username} deactivated.", false);
+            await ShowNotification($"{user.Username} deactivated.", false);
         }
 
         [RelayCommand]
@@ -1097,26 +989,15 @@ namespace SMWYG
             if (!CanManageUser(user))
                 return;
 
-            var entity = await _db.Users.FirstOrDefaultAsync(u => u.Id == user!.Id);
-            if (entity == null)
+            var result = await _api.ReactivateUserAsync(user!.Id);
+            if (result == null)
             {
-                await ShowNotification("User not found.", true);
+                await ShowNotification("User not found or could not be reactivated.", true);
                 return;
             }
 
-            if (!string.IsNullOrEmpty(entity.PasswordHash))
-            {
-                await ShowNotification("User is already active.", true);
-                return;
-            }
-
-            string tempPassword = GenerateSecureInviteToken(12);
-            entity.PasswordHash = PasswordHelper.HashPassword(tempPassword);
-
-            await _db.SaveChangesAsync();
             await LoadUsersAsync();
-
-            MessageBox.Show($"User '{entity.Username}' reactivated.\nTemporary password: {tempPassword}",
+            MessageBox.Show($"User '{user.Username}' reactivated.\nTemporary password: {result.TemporaryPassword}",
                 "User Reactivated",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -1137,52 +1018,7 @@ namespace SMWYG
             if (confirmation != MessageBoxResult.Yes)
                 return;
 
-            var entity = await _db.Users.FirstOrDefaultAsync(u => u.Id == user.Id);
-            if (entity == null)
-            {
-                await ShowNotification("User not found.", true);
-                return;
-            }
-
-            var ownedServers = await _db.Servers.Where(s => s.OwnerId == entity.Id).ToListAsync();
-            if (ownedServers.Count > 0)
-            {
-                _db.Servers.RemoveRange(ownedServers);
-            }
-
-            var memberships = await _db.ServerMembers.Where(sm => sm.UserId == entity.Id).ToListAsync();
-            if (memberships.Count > 0)
-            {
-                _db.ServerMembers.RemoveRange(memberships);
-            }
-
-            var messages = await _db.Messages.Where(m => m.AuthorId == entity.Id).ToListAsync();
-            if (messages.Count > 0)
-            {
-                _db.Messages.RemoveRange(messages);
-            }
-
-            var streams = await _db.ActiveStreams.Where(a => a.StreamerId == entity.Id).ToListAsync();
-            if (streams.Count > 0)
-            {
-                _db.ActiveStreams.RemoveRange(streams);
-            }
-
-            var tokensCreated = await _db.InviteTokens.Where(t => t.CreatedBy == entity.Id).ToListAsync();
-            foreach (var token in tokensCreated)
-            {
-                token.CreatedBy = currentUser.Id;
-            }
-
-            var tokensUsed = await _db.InviteTokens.Where(t => t.UsedBy == entity.Id).ToListAsync();
-            foreach (var token in tokensUsed)
-            {
-                token.UsedBy = null;
-            }
-
-            _db.Users.Remove(entity);
-            await _db.SaveChangesAsync();
-
+            await _api.DeleteUserAsync(user!.Id);
             await LoadUsersAsync();
             await ShowNotification("User deleted.", false);
         }
@@ -1192,11 +1028,7 @@ namespace SMWYG
             if (SelectedServer == null)
                 return;
 
-            var orderedChannels = await _db.Channels
-                .Where(c => c.ServerId == SelectedServer.Id)
-                .OrderBy(c => c.Position)
-                .ThenBy(c => c.CreatedAt)
-                .ToListAsync();
+            var orderedChannels = await _api.GetChannelsAsync(SelectedServer.Id);
 
             int currentIndex = orderedChannels.FindIndex(c => c.Id == channel.Id);
             if (currentIndex < 0)
@@ -1208,21 +1040,15 @@ namespace SMWYG
 
             (orderedChannels[currentIndex], orderedChannels[targetIndex]) = (orderedChannels[targetIndex], orderedChannels[currentIndex]);
             NormalizeChannelPositions(orderedChannels);
-            await _db.SaveChangesAsync();
-
-            await LoadChannelsAsync(SelectedServer.Id, channel.Id);
+            await _api.ReorderChannelsAsync(SelectedServer.Id, orderedChannels.Select(c => c.Id).ToArray());
         }
 
         private async Task NormalizeChannelPositionsAsync(Guid serverId)
         {
-            var orderedChannels = await _db.Channels
-                .Where(c => c.ServerId == serverId)
-                .OrderBy(c => c.Position)
-                .ThenBy(c => c.CreatedAt)
-                .ToListAsync();
+            var orderedChannels = await _api.GetChannelsAsync(serverId);
 
             NormalizeChannelPositions(orderedChannels);
-            await _db.SaveChangesAsync();
+            await _api.ReorderChannelsAsync(serverId, orderedChannels.Select(c => c.Id).ToArray());
         }
 
         private static void NormalizeChannelPositions(List<Channel> channels)
@@ -1251,6 +1077,159 @@ namespace SMWYG
             }
 
             return true;
+        }
+
+        [RelayCommand]
+        private async Task JoinServerAsync()
+        {
+            var dialog = new TextPromptDialog("Join Server", "Enter invite code", "Join")
+            {
+                Owner = Application.Current?.MainWindow
+            };
+
+            bool? dialogResult = dialog.ShowDialog();
+            if (dialogResult != true)
+                return;
+
+            string? inviteCode = dialog.InputText?.Trim();
+            if (string.IsNullOrWhiteSpace(inviteCode))
+                return;
+
+            inviteCode = inviteCode.ToUpperInvariant();
+
+            var server = await FindServerByInviteCodeAsync(inviteCode);
+            if (server == null)
+            {
+                MessageBox.Show("No server matches that invite code.", "Invalid Invite", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var members = await _api.GetServerMembersAsync(server.Id);
+            if (members.Any(m => m.UserId == currentUser.Id))
+            {
+                MessageBox.Show("You are already a member of this server.", "Already Joined", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var systemUser = await EnsureSystemUserAsync();
+            await _api.AddServerMemberAsync(server.Id, currentUser.Id, "member");
+            await BroadcastJoinSystemMessageAsync(server.Id, currentUser.Username, systemUser.Id);
+
+            await ReloadServersPreservingSelectionAsync(server.Id);
+
+            MessageBox.Show($"Joined '{server.Name}'.", "Server Joined", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private async Task<Server?> FindServerByInviteCodeAsync(string inviteCode)
+        {
+            var normalized = inviteCode.Trim().ToUpperInvariant();
+            var servers = await _api.GetAllServersAsync();
+            return servers.FirstOrDefault(s => GenerateInviteCode(s.Id).Equals(normalized, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private async Task<User> EnsureSystemUserAsync()
+        {
+            var systemUser = (await _api.GetAllUsersAsync()).FirstOrDefault(u => u.Username == "System");
+            if (systemUser != null)
+            {
+                return systemUser;
+            }
+
+            systemUser = new User
+            {
+                Id = Guid.NewGuid(),
+                Username = "System",
+                DisplayName = "System",
+                PasswordHash = PasswordHelper.HashPassword(Guid.NewGuid().ToString()),
+                CreatedAt = DateTime.UtcNow,
+                IsAdmin = true
+            };
+
+            // create system user via API
+            var created = await _api.CreateUserAsync(systemUser.Username, Guid.NewGuid().ToString(), true);
+            return created;
+        }
+
+        private async Task BroadcastJoinSystemMessageAsync(Guid serverId, string username, Guid systemUserId)
+        {
+            var textChannelIds = (await _api.GetChannelsAsync(serverId)).Where(c => c.Type == "text").Select(c => c.Id).ToList();
+
+            if (textChannelIds.Count == 0)
+                return;
+
+            var timestamp = DateTime.UtcNow;
+            foreach (var channelId in textChannelIds)
+            {
+                await _api.SendMessageAsync(new Message
+                {
+                    Id = Guid.NewGuid(),
+                    ChannelId = channelId,
+                    AuthorId = systemUserId,
+                    Content = $"{username} joined the server.",
+                    SentAt = timestamp
+                });
+            }
+        }
+
+        private void StartMessageRefresh(Guid channelId)
+        {
+            if (SelectedChannel == null || SelectedChannel.Type != "text" || SelectedChannel.Id != channelId)
+            {
+                return;
+            }
+
+            activeMessageRefreshChannelId = channelId;
+            if (!messageRefreshTimer.IsEnabled)
+            {
+                messageRefreshTimer.Start();
+            }
+        }
+
+        private void StopMessageRefresh()
+        {
+            messageRefreshTimer.Stop();
+            activeMessageRefreshChannelId = null;
+            latestMessageTimestampUtc = DateTime.MinValue;
+            isMessageRefreshTickRunning = false;
+        }
+
+        private async void MessageRefreshTimer_Tick(object? sender, EventArgs e)
+        {
+            if (isMessageRefreshTickRunning)
+                return;
+
+            if (activeMessageRefreshChannelId == null || SelectedChannel == null || SelectedChannel.Id != activeMessageRefreshChannelId || SelectedChannel.Type != "text")
+            {
+                StopMessageRefresh();
+                return;
+            }
+
+            isMessageRefreshTickRunning = true;
+            try
+            {
+                await FetchNewMessagesAsync(activeMessageRefreshChannelId.Value);
+            }
+            finally
+            {
+                isMessageRefreshTickRunning = false;
+            }
+        }
+
+        private async Task FetchNewMessagesAsync(Guid channelId)
+        {
+            var newMessages = await _api.GetNewMessagesAsync(channelId, latestMessageTimestampUtc);
+
+            if (newMessages.Count == 0)
+                return;
+
+            foreach (var message in newMessages)
+            {
+                Messages.Add(message);
+                if (message.SentAt > latestMessageTimestampUtc)
+                {
+                    latestMessageTimestampUtc = message.SentAt;
+                }
+            }
         }
     }
 }

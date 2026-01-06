@@ -41,6 +41,8 @@ Use the following Technology for the messaging system:
   * All messages should be retrievable when a user joins a channel (load last 100 messages for now).
   * Delete messages after 30 days automatically (background job).
 
+_Current status: the WPF client polls the database every ~2 seconds to surface new text messages instantly while we wait for the SignalR-backed ASP.NET Core API to come online._
+
 Phase four: Voice Streaming System
 Allow users to create voice channels within servers for streaming calls.
 Voice channels should allow all users to join and leave the stream.
@@ -166,4 +168,3 @@ CREATE TABLE active_streams (
     ended_at        TIMESTAMPTZ,
     UNIQUE(channel_id)  -- Only one active streamer per voice channel at a time
 );
-````

@@ -1,21 +1,20 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
-using Microsoft.EntityFrameworkCore;
 using SMWYG.Models;
-using SMWYG.Utils;
+using SMWYG.Services;
 
 namespace SMWYG
 {
     public partial class LoginWindow : Window
     {
-        private readonly AppDbContext _db;
+        private readonly IApiService _api;
         public User? SignedInUser { get; private set; }
 
-        public LoginWindow(AppDbContext db)
+        public LoginWindow(IApiService api)
         {
             InitializeComponent();
-            _db = db;
+            _api = api;
         }
 
         private async void SignInButton_Click(object sender, RoutedEventArgs e)
@@ -36,28 +35,23 @@ namespace SMWYG
                 return;
             }
 
-            var user = await _db.Users.FirstOrDefaultAsync(u => u.Username.ToLower() == username.ToLower());
-            if (user == null)
+            try
             {
-                ShowSignInError("Invalid credentials.");
-                return;
-            }
+                var user = await _api.LoginAsync(username, password);
+                if (user == null)
+                {
+                    ShowSignInError("Invalid credentials.");
+                    return;
+                }
 
-            if (string.IsNullOrEmpty(user.PasswordHash))
+                SignedInUser = user;
+                DialogResult = true;
+                Close();
+            }
+            catch
             {
-                ShowSignInError("Account is deactivated. Contact an administrator.");
-                return;
+                ShowSignInError("Sign in failed.");
             }
-
-            if (!PasswordHelper.VerifyPassword(user.PasswordHash, password))
-            {
-                ShowSignInError("Invalid credentials.");
-                return;
-            }
-
-            SignedInUser = user;
-            DialogResult = true;
-            Close();
         }
 
         private async void RegisterButton_Click(object sender, RoutedEventArgs e)
@@ -103,75 +97,24 @@ namespace SMWYG
                 return;
             }
 
-            bool usernameExists = await _db.Users.AnyAsync(u => u.Username.ToLower() == username.ToLower());
-            if (usernameExists)
-            {
-                ShowRegisterError("Username already exists.");
-                return;
-            }
-
-            string normalizedToken = tokenInput.ToUpperInvariant();
-            var invite = await _db.InviteTokens.FirstOrDefaultAsync(t => t.Token.ToUpper() == normalizedToken);
-            if (invite == null)
-            {
-                ShowRegisterError("Invalid invite token.");
-                return;
-            }
-
-            if (invite.ExpiresAt.HasValue && invite.ExpiresAt.Value <= DateTime.UtcNow)
-            {
-                ShowRegisterError("Invite token has expired.");
-                return;
-            }
-
-            if (invite.IsUsed && invite.MaxUses <= 0)
-            {
-                ShowRegisterError("Invite token has already been used.");
-                return;
-            }
-
-            if (invite.MaxUses <= 0)
-            {
-                ShowRegisterError("Invite token has no remaining uses.");
-                return;
-            }
-
-            var user = new User
-            {
-                Id = Guid.NewGuid(),
-                Username = username,
-                DisplayName = string.IsNullOrWhiteSpace(displayName) ? username : displayName,
-                PasswordHash = PasswordHelper.HashPassword(password),
-                CreatedAt = DateTime.UtcNow,
-                IsAdmin = false
-            };
-
-            await using var transaction = await _db.Database.BeginTransactionAsync();
             try
             {
-                _db.Users.Add(user);
-                await _db.SaveChangesAsync();
-
-                invite.MaxUses = Math.Max(0, invite.MaxUses - 1);
-                if (invite.MaxUses == 0)
+                string effectiveDisplayName = string.IsNullOrWhiteSpace(displayName) ? username : displayName;
+                var user = await _api.RegisterAsync(tokenInput.Trim(), username.Trim(), effectiveDisplayName.Trim(), password);
+                if (user == null)
                 {
-                    invite.IsUsed = true;
-                    invite.UsedBy = user.Id;
+                    ShowRegisterError("Registration failed.");
+                    return;
                 }
 
-                await _db.SaveChangesAsync();
-                await transaction.CommitAsync();
+                SignedInUser = user;
+                DialogResult = true;
+                Close();
             }
             catch
             {
-                await transaction.RollbackAsync();
-                ShowRegisterError("Registration failed. Try again.");
-                return;
+                ShowRegisterError("Registration failed.");
             }
-
-            SignedInUser = user;
-            DialogResult = true;
-            Close();
         }
 
         private void ShowSignInError(string message)

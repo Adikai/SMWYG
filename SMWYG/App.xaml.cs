@@ -1,9 +1,9 @@
-﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.IO;
 using System.Windows;
+using SMWYG.Services;
 
 namespace SMWYG
 {
@@ -29,9 +29,22 @@ namespace SMWYG
             // Register configuration so it can be injected
             services.AddSingleton<IConfiguration>(Configuration);
 
-            // Register DbContext using the connection string from config
-            services.AddDbContext<AppDbContext>(options =>
-                options.UseNpgsql(Configuration.GetConnectionString("DefaultConnection")));
+            // Determine API base URL; support either a top-level "ApiBaseUrl" or nested under "AppSettings:ApiBaseUrl"
+            var apiBaseUrl = Configuration.GetValue<string>("ApiBaseUrl")
+                             ?? Configuration.GetValue<string>("AppSettings:ApiBaseUrl")
+                             ?? "https://localhost:5001/";
+
+            // Register API HttpClient and service to call the API instead of local DbContext
+            services.AddHttpClient<IApiService, ApiService>(client =>
+            {
+                client.BaseAddress = new Uri(apiBaseUrl);
+            });
+
+            // no direct registration of IHttpClientFactory needed; typed AddHttpClient registers the factory
+
+            // Replace direct DbContext usage in UI with ApiService - keep DbContext for migrations/admin tasks
+            // services.AddDbContext<AppDbContext>(options =>
+            //    options.UseNpgsql(Configuration.GetConnectionString("DefaultConnection")));
 
             // Register your ViewModels and Windows
             services.AddSingleton<MainViewModel>();
