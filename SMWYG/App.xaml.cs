@@ -40,12 +40,6 @@ namespace SMWYG
                 client.BaseAddress = new Uri(apiBaseUrl);
             });
 
-            // no direct registration of IHttpClientFactory needed; typed AddHttpClient registers the factory
-
-            // Replace direct DbContext usage in UI with ApiService - keep DbContext for migrations/admin tasks
-            // services.AddDbContext<AppDbContext>(options =>
-            //    options.UseNpgsql(Configuration.GetConnectionString("DefaultConnection")));
-
             // Register your ViewModels and Windows
             services.AddSingleton<MainViewModel>();
             services.AddSingleton<MainWindow>();
