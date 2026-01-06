@@ -11,21 +11,18 @@
         <converters:RelativePathToImageConverter x:Key="RelativePathToImageConverter"/>
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
         <converters:ChannelTypeToIconConverter x:Key="ChannelTypeToIconConverter"/>
+        <converters:HubStatusToBrushConverter x:Key="HubStatusToBrushConverter"/>
     </Window.Resources>
 
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="72" />
-            <!-- Servers -->
             <ColumnDefinition Width="240" />
-            <!-- Channels -->
             <ColumnDefinition Width="*" />
-            <!-- Main Content -->
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
             <RowDefinition Height="60" />
-            <!-- User Profile Bar -->
         </Grid.RowDefinitions>
 
         <!-- 1. Servers Sidebar -->
@@ -221,6 +218,24 @@
                                     </StackPanel>
                                 </StackPanel>
                                 <TextBlock Text="{Binding Content}" Foreground="#DCDEDF" TextWrapping="Wrap" Margin="52,4,16,0"/>
+                                <Image Source="{Binding AttachmentUrl}" Height="160" Margin="52,8,16,0" Stretch="Uniform">
+                                    <Image.Style>
+                                        <Style TargetType="Image">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding AttachmentUrl}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding AttachmentUrl}" Value="">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Image.Style>
+                                    <Image.InputBindings>
+                                        <MouseBinding Gesture="LeftClick" Command="{Binding DataContext.OpenImageViewerCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding AttachmentUrl}"/>
+                                    </Image.InputBindings>
+                                </Image>
                             </StackPanel>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
@@ -228,16 +243,24 @@
             </ScrollViewer>
 
             <!-- Message Input -->
-            <TextBox Grid.Row="1" VerticalAlignment="Bottom"
-                     Margin="16,0,16,16" Padding="12" FontSize="14"
-                     Background="#40444B" Foreground="White"
-                     BorderBrush="#292B2F" BorderThickness="1"
-                     Text="{Binding MessageInput, UpdateSourceTrigger=PropertyChanged}"
-                     AcceptsReturn="False">
-                <TextBox.InputBindings>
-                    <KeyBinding Key="Enter" Command="{Binding SendMessageCommand}"/>
-                </TextBox.InputBindings>
-            </TextBox>
+            <DockPanel Grid.Row="1" VerticalAlignment="Bottom" Margin="16,0,16,16">
+                <Button Content="📷" Width="40" Height="40" Margin="0,0,8,0" Command="{Binding UploadAndSendCommand}"/>
+                <TextBox VerticalAlignment="Bottom" 
+                         Margin="0" Padding="12" FontSize="14"
+                         Background="#40444B" Foreground="White"
+                         BorderBrush="#292B2F" BorderThickness="1"
+                         Text="{Binding MessageInput, UpdateSourceTrigger=PropertyChanged}"
+                         AcceptsReturn="False"
+                         HorizontalAlignment="Stretch">
+                    <TextBox.InputBindings>
+                        <KeyBinding Key="Enter" Command="{Binding SendMessageCommand}"/>
+                    </TextBox.InputBindings>
+                </TextBox>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" Margin="8,0,0,0">
+                    <Ellipse Width="12" Height="12" VerticalAlignment="Center" Fill="{Binding HubStatus, Converter={StaticResource HubStatusToBrushConverter}}" Margin="0,0,6,0"/>
+                    <TextBlock Text="{Binding HubStatus}" Foreground="#B9BBBE" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+            </DockPanel>
         </Grid>
 
         <!-- 4. Bottom User Profile Bar -->

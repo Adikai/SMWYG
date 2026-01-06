@@ -22,6 +22,13 @@ namespace SMWYG.Models
         [Column("content")]
         public string Content { get; set; } = string.Empty;
 
+        // Optional attachment (image/gif) URL and content type
+        [Column("attachment_url")]
+        public string? AttachmentUrl { get; set; }
+
+        [Column("attachment_content_type")]
+        public string? AttachmentContentType { get; set; }
+
         [Column("sent_at")]
         public DateTime SentAt { get; set; }
 

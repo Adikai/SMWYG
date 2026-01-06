@@ -1,5 +1,11 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using SMWYG.DTOs;
 using SMWYG.Models;
 
 namespace SMWYG.Services
@@ -18,6 +24,8 @@ namespace SMWYG.Services
         Task<Channel> CreateChannelAsync(Guid serverId, string name, string type, string? category, int position);
         Task RenameChannelAsync(Guid channelId, string newName);
         Task<Message> SendMessageAsync(Message message);
+        Task<Message> SendMessageAsync(MessageDto dto);
+        Task<UploadResultDto?> UploadFileAsync(Stream stream, string fileName, string contentType, CancellationToken cancellationToken);
         Task UpdateServerIconAsync(Guid serverId, string iconPath);
         Task<User?> LoginAsync(string username, string password);
         Task<User?> RegisterAsync(string inviteToken, string username, string? displayName, string password);
@@ -93,9 +101,62 @@ namespace SMWYG.Services
 
         public async Task<Message> SendMessageAsync(Message message)
         {
-            var res = await _http.PostAsJsonAsync("api/messages", message);
+            var dto = new MessageDto
+            {
+                ChannelId = message.ChannelId,
+                AuthorId = message.AuthorId,
+                Content = message.Content,
+                AttachmentUrl = message.AttachmentUrl,
+                AttachmentContentType = message.AttachmentContentType
+            };
+            var res = await _http.PostAsJsonAsync("api/messages", dto);
             res.EnsureSuccessStatusCode();
-            return await res.Content.ReadFromJsonAsync<Message>()!;
+            var returned = await res.Content.ReadFromJsonAsync<Message>();
+            return returned ?? new Message
+            {
+                Id = message.Id,
+                ChannelId = message.ChannelId,
+                AuthorId = message.AuthorId,
+                Content = message.Content,
+                AttachmentUrl = message.AttachmentUrl,
+                AttachmentContentType = message.AttachmentContentType,
+                SentAt = message.SentAt
+            };
+        }
+
+        public async Task<Message> SendMessageAsync(MessageDto dto)
+        {
+            var res = await _http.PostAsJsonAsync("api/messages", dto);
+            res.EnsureSuccessStatusCode();
+            var returned = await res.Content.ReadFromJsonAsync<Message>();
+            if (returned != null)
+            {
+                return returned;
+            }
+
+            return new Message
+            {
+                Id = dto.Id,
+                ChannelId = dto.ChannelId,
+                AuthorId = dto.AuthorId,
+                Content = dto.Content ?? string.Empty,
+                AttachmentUrl = dto.AttachmentUrl,
+                AttachmentContentType = dto.AttachmentContentType,
+                SentAt = dto.SentAt
+            };
+        }
+
+        public async Task<UploadResultDto?> UploadFileAsync(Stream stream, string fileName, string contentType, CancellationToken cancellationToken)
+        {
+            using var content = new MultipartFormDataContent();
+            var streamContent = new StreamContent(stream);
+            streamContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
+            content.Add(streamContent, "file", fileName);
+
+            var res = await _http.PostAsync("api/uploads", content, cancellationToken);
+            if (!res.IsSuccessStatusCode) return null;
+            var local = await res.Content.ReadFromJsonAsync<UploadResultDto>(cancellationToken: cancellationToken);
+            return local;
         }
 
         public async Task UpdateServerIconAsync(Guid serverId, string iconPath)

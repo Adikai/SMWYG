@@ -1,8 +1,10 @@
 using AutoMapper;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using SMWYG;
 using SMWYG.Api.DTOs;
+using SMWYG.Api.Hubs;
 using SMWYG.Models;
 
 namespace SMWYG.Api.Controllers
@@ -13,11 +15,13 @@ namespace SMWYG.Api.Controllers
     {
         private readonly AppDbContext _db;
         private readonly IMapper _mapper;
+        private readonly IHubContext<ChatHub> _hub;
 
-        public MessagesController(AppDbContext db, IMapper mapper)
+        public MessagesController(AppDbContext db, IMapper mapper, IHubContext<ChatHub> hub)
         {
             _db = db;
             _mapper = mapper;
+            _hub = hub;
         }
 
         [HttpGet]
@@ -71,12 +75,21 @@ namespace SMWYG.Api.Controllers
         {
             if (!ModelState.IsValid) return BadRequest(ModelState);
 
+            var hasContent = !string.IsNullOrWhiteSpace(messageDto.Content);
+            var hasAttachment = !string.IsNullOrWhiteSpace(messageDto.AttachmentUrl);
+            if (!hasContent && !hasAttachment)
+            {
+                return BadRequest(new { error = "Message must include text or an attachment." });
+            }
+
             var message = new Message
             {
                 Id = Guid.NewGuid(),
                 ChannelId = messageDto.ChannelId,
                 AuthorId = messageDto.AuthorId,
-                Content = messageDto.Content,
+                Content = messageDto.Content?.Trim() ?? string.Empty,
+                AttachmentUrl = messageDto.AttachmentUrl,
+                AttachmentContentType = messageDto.AttachmentContentType,
                 SentAt = DateTime.UtcNow
             };
 
@@ -85,6 +98,10 @@ namespace SMWYG.Api.Controllers
 
             var dto = _mapper.Map<MessageDto>(message);
             dto.Author = _mapper.Map<UserDto>(await _db.Users.FindAsync(message.AuthorId));
+
+            // broadcast to SignalR group for the channel
+            await _hub.Clients.Group(message.ChannelId.ToString()).SendAsync("NewMessage", dto);
+
             return CreatedAtAction(nameof(Get), new { id = message.Id }, dto);
         }
 

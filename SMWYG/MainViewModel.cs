@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
+using Microsoft.AspNetCore.SignalR.Client;
 using SMWYG.Dialogs;
 using SMWYG.Models;
 using SMWYG.Services;
@@ -10,12 +11,18 @@ using SMWYG.Utils;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Threading;
+using SMWYG.DTOs;
 
 namespace SMWYG
 {
@@ -23,6 +30,8 @@ namespace SMWYG
     {
         private readonly IApiService _api;
         private readonly IConfiguration _config;
+        private HubConnection? _hubConnection;
+
         private Guid? _pendingChannelSelection;
 
         private readonly DispatcherTimer messageRefreshTimer;
@@ -160,10 +169,28 @@ namespace SMWYG
 
         public User CurrentUser => currentUser;
 
+        // New observable properties
+        [ObservableProperty]
+        private double uploadProgress;
+
+        [ObservableProperty]
+        private bool isUploading;
+
+        [ObservableProperty]
+        private long uploadSizeLimitBytes = 5 * 1024 * 1024; // default 5MB
+
         public MainViewModel(IApiService api, IConfiguration config)
         {
             _api = api;
             _config = config;
+
+            // read upload limit from config
+            var limitMb = config.GetValue<long?>("AppSettings:UploadSizeLimitMB");
+            if (limitMb.HasValue && limitMb.Value > 0)
+            {
+                UploadSizeLimitBytes = limitMb.Value * 1024 * 1024;
+            }
+
             UserSettingsUsername = currentUser.Username;
             UserSettingsProfilePicturePath = currentUser.ProfilePicture;
 
@@ -172,6 +199,107 @@ namespace SMWYG
                 Interval = TimeSpan.FromSeconds(2)
             };
             messageRefreshTimer.Tick += MessageRefreshTimer_Tick;
+
+            InitializeSignalR();
+        }
+
+        [ObservableProperty]
+        private bool isHubConnected;
+
+        [ObservableProperty]
+        private string hubStatus = "Disconnected";
+
+        private void InitializeSignalR()
+        {
+            var apiBase = _config.GetValue<string>("ApiBaseUrl") ?? _config.GetValue<string>("AppSettings:ApiBaseUrl") ?? "https://localhost:5001/";
+            _hubConnection = new HubConnectionBuilder()
+                .WithUrl(new Uri(new Uri(apiBase), "/hubs/chat"))
+                .WithAutomaticReconnect()
+                .Build();
+
+            _hubConnection.Reconnecting += async (ex) =>
+            {
+                IsHubConnected = false;
+                HubStatus = "Reconnecting...";
+                await Task.CompletedTask;
+            };
+
+            _hubConnection.Reconnected += async (id) =>
+            {
+                IsHubConnected = true;
+                HubStatus = "Connected";
+                await Task.CompletedTask;
+            };
+
+            _hubConnection.Closed += async (ex) =>
+            {
+                IsHubConnected = false;
+                HubStatus = "Disconnected";
+                // try to restart after a short delay
+                await Task.Delay(TimeSpan.FromSeconds(5));
+                try
+                {
+                    await _hubConnection.StartAsync();
+                    IsHubConnected = true;
+                    HubStatus = "Connected";
+                }
+                catch
+                {
+                    // swallow, next reconnect attempt will trigger
+                }
+            };
+
+            _hubConnection.On<SMWYG.DTOs.MessageDto>("NewMessage", (dto) =>
+            {
+                App.Current.Dispatcher.Invoke(() =>
+                {
+                    var author = dto.Author;
+                    if (author == null && dto.AuthorId == currentUser.Id)
+                    {
+                        author = currentUser;
+                    }
+
+                    var m = new Message
+                    {
+                        Id = dto.Id,
+                        ChannelId = dto.ChannelId,
+                        AuthorId = dto.AuthorId,
+                        Author = author,
+                        Content = dto.Content ?? string.Empty,
+                        AttachmentUrl = dto.AttachmentUrl,
+                        AttachmentContentType = dto.AttachmentContentType,
+                        SentAt = dto.SentAt
+                    };
+                    Messages.Add(m);
+                });
+            });
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _hubConnection.StartAsync();
+                    IsHubConnected = true;
+                    HubStatus = "Connected";
+                }
+                catch
+                {
+                    IsHubConnected = false;
+                    HubStatus = "Disconnected";
+                }
+            });
+        }
+
+        private async Task JoinHubChannelAsync(Guid channelId)
+        {
+            if (_hubConnection == null) return;
+            await _hubConnection.InvokeAsync("JoinChannel", channelId.ToString());
+        }
+
+        private async Task LeaveHubChannelAsync(Guid channelId)
+        {
+            if (_hubConnection == null) return;
+            await _hubConnection.InvokeAsync("LeaveChannel", channelId.ToString());
         }
 
         // Called after a successful login to populate current user and update bindings
@@ -283,9 +411,14 @@ namespace SMWYG
             if (value != null && value.Type == "text")
             {
                 _ = LoadMessagesAsync(value.Id, true);
+                _ = JoinHubChannelAsync(value.Id);
             }
             else
             {
+                if (SelectedChannel != null)
+                {
+                    _ = LeaveHubChannelAsync(SelectedChannel.Id);
+                }
                 StopMessageRefresh();
                 Messages.Clear();
             }
@@ -481,12 +614,109 @@ namespace SMWYG
             };
 
             var created = await _api.SendMessageAsync(newMessage);
-            Messages.Add(created);
+            // if SignalR is connected server will push to clients including this one; still add if not
+            if (_hubConnection == null || _hubConnection.State != HubConnectionState.Connected)
+            {
+                Messages.Add(created);
+            }
+
             if (created.SentAt > latestMessageTimestampUtc)
             {
                 latestMessageTimestampUtc = created.SentAt;
             }
             MessageInput = string.Empty;
+        }
+
+        [RelayCommand]
+        private async Task UploadAndSendAsync()
+        {
+            if (SelectedChannel == null || SelectedChannel.Type != "text")
+                return;
+
+            var dialog = new OpenFileDialog
+            {
+                Filter = "Image Files|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp",
+                Title = "Select Image/GIF"
+            };
+
+            bool? result = dialog.ShowDialog();
+            if (result != true) return;
+
+            var filePath = dialog.FileName;
+            var fileInfo = new FileInfo(filePath);
+            if (fileInfo.Length > UploadSizeLimitBytes)
+            {
+                MessageBox.Show($"File too large. Limit is {UploadSizeLimitBytes / (1024 * 1024)} MB.", "File Too Large", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var uploadWindow = new SMWYG.Windows.UploadProgressWindow
+            {
+                Owner = Application.Current?.MainWindow
+            };
+
+            // bind progress
+            uploadWindow.UploadProgress = UploadProgress;
+            uploadWindow.IsUploading = true;
+
+            uploadWindow.Show();
+
+            try
+            {
+                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+                var progressStream = new ProgressableStream(fs, (sent, total) =>
+                {
+                    UploadProgress = total > 0 ? (double)sent / total * 100.0 : 0;
+                    // update modal window
+                    uploadWindow.UploadProgress = UploadProgress;
+                });
+
+                var cancellationToken = uploadWindow.Cts.Token;
+                var uploadResult = await _api.UploadFileAsync(progressStream, Path.GetFileName(filePath), MimeTypes.GetMimeType(filePath), cancellationToken);
+                if (uploadResult == null)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        await ShowNotification("Upload cancelled.", false);
+                    }
+                    else
+                    {
+                        await ShowNotification("Upload failed.", true);
+                    }
+                    return;
+                }
+
+                var msgDto = new MessageDto
+                {
+                    ChannelId = SelectedChannel.Id,
+                    AuthorId = currentUser.Id,
+                    Content = MessageInput?.Trim() ?? string.Empty,
+                    AttachmentUrl = uploadResult.Url,
+                    AttachmentContentType = uploadResult.ContentType,
+                    SentAt = DateTime.UtcNow
+                };
+
+                var created = await _api.SendMessageAsync(msgDto);
+                if (_hubConnection == null || _hubConnection.State != HubConnectionState.Connected)
+                    Messages.Add(created);
+
+                MessageInput = string.Empty;
+            }
+            finally
+            {
+                uploadWindow.Close();
+                IsUploading = false;
+                UploadProgress = 0;
+            }
+        }
+
+        [RelayCommand]
+        private void OpenImageViewer(string? url)
+        {
+            if (string.IsNullOrEmpty(url)) return;
+            var viewer = new SMWYG.Windows.ImageViewer();
+            viewer.LoadFromUrl(url);
+            viewer.Show();
         }
 
         [RelayCommand]
@@ -903,6 +1133,11 @@ namespace SMWYG
             CopyNotificationVisible = false;
         }
 
+        public Task NotifyAsync(string text, bool isError)
+        {
+            return ShowNotification(text, isError);
+        }
+
         [RelayCommand]
         private async void CopyInviteToken(string? token)
         {
@@ -1229,6 +1464,46 @@ namespace SMWYG
                 {
                     latestMessageTimestampUtc = message.SentAt;
                 }
+            }
+        }
+
+        // ProgressableStream class to report upload progress
+        internal class ProgressableStream : Stream
+        {
+            private readonly Stream _inner;
+            private readonly Action<long, long> _progress;
+            private long _position;
+
+            public ProgressableStream(Stream inner, Action<long, long> progress)
+            {
+                _inner = inner;
+                _progress = progress;
+                _position = 0;
+            }
+
+            public override bool CanRead => _inner.CanRead;
+            public override bool CanSeek => _inner.CanSeek;
+            public override bool CanWrite => _inner.CanWrite;
+            public override long Length => _inner.Length;
+
+            public override long Position { get => _inner.Position; set => _inner.Position = value; }
+
+            public override void Flush() => _inner.Flush();
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                int read = _inner.Read(buffer, offset, count);
+                _position += read;
+                _progress?.Invoke(_position, Length);
+                return read;
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
+            public override void SetLength(long value) => _inner.SetLength(value);
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                _inner.Write(buffer, offset, count);
+                _position += count;
+                _progress?.Invoke(_position, Length);
             }
         }
     }

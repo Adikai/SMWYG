@@ -11,9 +11,12 @@ namespace SMWYG.Api.DTOs
         // include minimal author info for UI (profile picture, display name, username)
         public UserDto? Author { get; set; }
 
-        [Required]
-        [StringLength(2000, MinimumLength = 1)]
-        public string Content { get; set; } = string.Empty;
+        [StringLength(2000, MinimumLength = 0)]
+        public string? Content { get; set; }
+
+        // Optional attachment (image/gif) URL served by the API
+        public string? AttachmentUrl { get; set; }
+        public string? AttachmentContentType { get; set; }
 
         public DateTime SentAt { get; set; }
         public DateTime? EditedAt { get; set; }

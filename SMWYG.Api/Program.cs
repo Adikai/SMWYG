@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SMWYG;
 using SMWYG.Api.Hubs;
+using SMWYG.Api.Background;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,6 +36,12 @@ builder.Services.AddAutoMapper(typeof(Program));
 // Add SignalR for future real-time messaging
 builder.Services.AddSignalR();
 
+// Static files for uploads
+builder.Services.AddDirectoryBrowser();
+
+// Register cleanup background service
+builder.Services.AddHostedService<CleanupJob>();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -45,6 +52,12 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseRouting();
+
+// serve uploads
+var uploadsRoot = Path.Combine(app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot"), "uploads");
+Directory.CreateDirectory(uploadsRoot);
+app.UseStaticFiles();
+app.UseDirectoryBrowser();
 
 app.MapControllers();
 app.MapHub<ChatHub>("/hubs/chat");

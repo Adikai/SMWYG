@@ -11,41 +11,86 @@ namespace SMWYG.Converters
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
-            if (value is not string path || string.IsNullOrWhiteSpace(path))
+            if (value is not string rawPath || string.IsNullOrWhiteSpace(rawPath))
             {
                 return DependencyProperty.UnsetValue;
             }
 
-            string resolvedPath = path;
-            if (!Path.IsPathRooted(resolvedPath))
-            {
-                resolvedPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, path);
-            }
+            var trimmed = rawPath.Trim();
 
-            if (!File.Exists(resolvedPath))
+            if (TryCreateBitmap(trimmed, out var bitmap))
             {
-                return DependencyProperty.UnsetValue;
-            }
-
-            try
-            {
-                var bitmap = new BitmapImage();
-                bitmap.BeginInit();
-                bitmap.UriSource = new Uri(resolvedPath, UriKind.Absolute);
-                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.EndInit();
-                bitmap.Freeze();
                 return bitmap;
             }
-            catch
+
+            var apiBase = App.Configuration?["ApiBaseUrl"]
+                          ?? App.Configuration?["AppSettings:ApiBaseUrl"];
+            if (!string.IsNullOrWhiteSpace(apiBase)
+                && Uri.TryCreate(apiBase, UriKind.Absolute, out var baseUri))
             {
-                return DependencyProperty.UnsetValue;
+                try
+                {
+                    var combinedUri = new Uri(baseUri, trimmed.TrimStart('/'));
+                    if (TryCreateBitmap(combinedUri.AbsoluteUri, out bitmap))
+                    {
+                        return bitmap;
+                    }
+                }
+                catch
+                {
+                    // ignore and continue to default
+                }
             }
+
+            return DependencyProperty.UnsetValue;
         }
 
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
         {
             throw new NotImplementedException();
+        }
+
+        private static bool TryCreateBitmap(string source, out BitmapImage bitmap)
+        {
+            bitmap = null!;
+
+            try
+            {
+                if (Uri.TryCreate(source, UriKind.Absolute, out var uri))
+                {
+                    if (uri.IsFile && !File.Exists(uri.LocalPath))
+                    {
+                        return false;
+                    }
+
+                    bitmap = LoadBitmap(uri);
+                    return true;
+                }
+
+                var localPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, source.TrimStart('\\', '/'));
+                if (!File.Exists(localPath))
+                {
+                    return false;
+                }
+
+                bitmap = LoadBitmap(new Uri(localPath, UriKind.Absolute));
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static BitmapImage LoadBitmap(Uri uri)
+        {
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.UriSource = uri;
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.EndInit();
+            bitmap.Freeze();
+            return bitmap;
         }
     }
 }
